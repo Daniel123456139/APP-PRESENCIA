@@ -1,0 +1,188 @@
+/**
+ * Firestore Security Rules
+ * 
+ * PROPÓSITO:
+ * - Proteger colecciones compartidas entre APP - PRESENCIA y APP - TALENTO
+ * - Implementar control de acceso basado en roles
+ * - Prevenir escritura de PII en Firestore
+ * 
+ * ROLES:
+ * - hr: Recursos Humanos (lectura de datos)
+ * - admin: Administrador (lectura y escritura)
+ * - system: Sistema automatizado (solo para logs)
+ * 
+ * @version 2.0
+ */
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ═══════════════════════════════════════════════════════════════
+    // HELPER FUNCTIONS
+    // ═══════════════════════════════════════════════════════════════
+    
+    /**
+     * Verificar si el usuario está autenticado
+     */
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    /**
+     * Verificar si el usuario tiene un rol específico
+     */
+    function hasRole(role) {
+      return isAuthenticated() && 
+             request.auth.token.role == role;
+    }
+    
+    /**
+     * Verificar si el usuario tiene al menos uno de los roles especificados
+     */
+    function hasAnyRole(roles) {
+      return isAuthenticated() && 
+             request.auth.token.role in roles;
+    }
+    
+    /**
+     * Validar que no se incluyan campos PII prohibidos
+     * CRÍTICO PARA GDPR
+     */
+    function noPII() {
+      let data = request.resource.data;
+      return !('DescOperario' in data) &&
+             !('nombre' in data) &&
+             !('apellidos' in data) &&
+             !('DNI' in data) &&
+             !('NIF' in data) &&
+             !('telefono' in data) &&
+             !('email_personal' in data);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: EMPLEADOS_REF (Datos compartidos con APP - TALENTO)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /EMPLEADOS_REF/{employeeId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Escritura: Solo Admin, con validación anti-PII
+      allow create, update: if hasRole('admin') && noPII();
+      
+      // Eliminación: Solo Admin
+      allow delete: if hasRole('admin');
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: EMPLEADOS (Legacy - mantener por compatibilidad)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /EMPLEADOS/{employeeId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Escritura: Solo Admin, con validación anti-PII
+      allow create, update: if hasRole('admin') && noPII();
+      
+      // Eliminación: Solo Admin
+      allow delete: if hasRole('admin');
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: COMPETENCIAS
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /COMPETENCIAS/{competenciaId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Escritura: Solo Admin
+      allow write: if hasRole('admin');
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: NOTAS
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /NOTAS/{notaId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Creación: HR y Admin pueden crear notas
+      allow create: if hasAnyRole(['hr', 'admin']) &&
+                       request.resource.data.autor == request.auth.token.email;
+      
+      // Actualización/Eliminación: Solo el autor o Admin
+      allow update, delete: if hasRole('admin') || 
+                               (isAuthenticated() && resource.data.autor == request.auth.token.email);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: EMPLOYEE_AUDIT_LOG (Historial de Cambios)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /EMPLOYEE_AUDIT_LOG/{logId} {
+      // Lectura: Solo Admin
+      allow read: if hasRole('admin');
+      
+      // Escritura: Solo Admin y Sistema
+      allow create: if hasAnyRole(['admin', 'system']);
+      
+      // NO permitir actualización ni eliminación (logs inmutables)
+      allow update, delete: if false;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: EMPLOYEE_ACCESS_LOG (Registro de Accesos)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /EMPLOYEE_ACCESS_LOG/{accessId} {
+      // Lectura: Solo Admin
+      allow read: if hasRole('admin');
+      
+      // Creación: Cualquier usuario autenticado puede registrar su acceso
+      allow create: if isAuthenticated() &&
+                       request.resource.data.accessedBy == request.auth.token.email;
+      
+      // NO permitir actualización ni eliminación (logs inmutables)
+      allow update, delete: if false;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: SICK_LEAVES (Bajas Médicas)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /SICK_LEAVES/{leaveId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Escritura: Solo HR y Admin
+      allow write: if hasAnyRole(['hr', 'admin']);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: INCIDENT_LOG
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /INCIDENT_LOG/{incidentId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Creación: HR y Admin
+      allow create: if hasAnyRole(['hr', 'admin']);
+      
+      // NO permitir actualización ni eliminación (logs inmutables)
+      allow update, delete: if false;
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // REGLA POR DEFECTO: DENEGAR TODO LO DEMÁS
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
