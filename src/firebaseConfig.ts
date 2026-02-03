@@ -6,20 +6,25 @@ import { getStorage, FirebaseStorage } from 'firebase/storage';
 import logger from './utils/logger';
 
 // Configuración pública de Firebase
+// SECURITY UPDATE: Fallbacks removed to prevent leakage. Must use .env
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyC0_qixTZbKMN3eEp08dKCuw8zRnXuNAUc',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'app-presencia.firebaseapp.com',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'app-presencia',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'app-presencia.firebasestorage.app',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '426717771094',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:426717771094:web:f667103fc2c020bdd6d2f7',
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || 'G-TX18GMW4SG'
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 // Validación de Configuración Crítica
-if (!firebaseConfig.projectId) {
-  logger.error("🚨 CRITICAL: Falta VITE_FIREBASE_PROJECT_ID en .env", "Firestore fallará con 'Invalid segment'");
-  console.error("Firebase Config Error: Missing projectId. Check your .env file.");
+const requiredEnvVars = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
+const missingVars = requiredEnvVars.filter(key => !firebaseConfig[key as keyof typeof firebaseConfig]);
+
+if (missingVars.length > 0) {
+  logger.error("🚨 CRITICAL SECURITY: Falta configuración de Firebase en .env", `Faltan: ${missingVars.join(', ')}`);
+  console.error(`🔥 FIREBASE CONFIG ERROR: Missing environment variables: ${missingVars.join(', ')}. \nPlease create a .env file with VITE_FIREBASE_* variables.`);
+  // No throw error here to allow app to render a "Configuration Error" UI if needed, but Firestore will fail.
 }
 
 let app: FirebaseApp | undefined;

@@ -1,5 +1,5 @@
 /**
- * Servicio de Encriptación Básica en Memoria
+ * Servicio de Encriptación Básica en Memoria y Persistencia
  * 
  * ADVERTENCIA:
  * - Esto NO es encriptación de grado militar
@@ -12,8 +12,12 @@
 
 import logger from '../utils/logger';
 
-// Clave de sesión (se regenera en cada carga)
+// Clave de sesión (se regenera en cada carga) - Para datos volátiles
 const SESSION_KEY = `key_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+// Clave persistente (Para LocalStorage que debe sobrevivir a recargas)
+// Se debe definir VITE_STORAGE_KEY en .env
+const PERSISTENT_KEY = import.meta.env.VITE_STORAGE_KEY || 'default_offline_storage_key_change_me';
 
 // ═══════════════════════════════════════════════════════════════════
 // FUNCIONES PRINCIPALES
@@ -36,11 +40,10 @@ export function encryptData(data: any, customKey?: string): string {
         }
 
         // Convertir a Base64 para que sea almacenable
-        const base64 = btoa(encrypted);
-        return base64;
+        return btoa(encrypted);
     } catch (error) {
         logger.error('❌ Error encriptando datos:', error);
-        return JSON.stringify(data); // Fallback sin encriptar
+        return '';
     }
 }
 
@@ -63,14 +66,42 @@ export function decryptData(encrypted: string, customKey?: string): any {
 
         return JSON.parse(jsonString);
     } catch (error) {
-        logger.error('❌ Error desencriptando datos:', error);
-        // Intentar parsear directamente por si no está encriptado
-        try {
-            return JSON.parse(encrypted);
-        } catch {
-            return null;
-        }
+        // Silencioso si falla desencriptación (puede ser dato corrupto o no encriptado)
+        return null;
     }
+}
+
+/**
+ * Helper específico para Storage Persistente (LocalStorage)
+ * Usa la clave PERSISTENT_KEY
+ */
+export function encryptStorageData(data: any): string {
+    return encryptData(data, PERSISTENT_KEY);
+}
+
+/**
+ * Helper específico para Storage Persistente con migración legacy
+ * Intenta desencriptar con PERSISTENT_KEY. Si falla, intenta parsear como JSON plano (migración suave).
+ */
+export function decryptStorageData(rawData: string | null): any {
+    if (!rawData) return null;
+
+    // 1. Intentar desencriptar
+    const decrypted = decryptData(rawData, PERSISTENT_KEY);
+    if (decrypted !== null) return decrypted;
+
+    // 2. Fallback: Intentar leer JSON plano (datos antiguos antes del parche de seguridad)
+    try {
+        // Verificación rápida: si parece base64 pero falló decrypt, puede ser basura.
+        // Si empieza por [ o { es probable que sea JSON plano.
+        if (rawData.trim().startsWith('[') || rawData.trim().startsWith('{')) {
+            return JSON.parse(rawData);
+        }
+    } catch (e) {
+        // Ignorar
+    }
+
+    return null;
 }
 
 /**

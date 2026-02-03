@@ -27,6 +27,7 @@ import { AuditBridge } from './services/AuditBridge';
 import { fetchFichajes } from './services/apiService';
 import { getCalendarioEmpresa, CalendarioDia } from './services/erpApi';
 import { SyncService } from './services/syncService';
+import { encryptStorageData, decryptStorageData } from './services/encryptionService';
 
 export interface AuthContextType {
     user: User | null;
@@ -61,7 +62,8 @@ const MainRoutes: React.FC = () => {
     const [incidentLog, setIncidentLog] = useState<IncidentLogEntry[]>(() => {
         try {
             const saved = localStorage.getItem('incidentLog');
-            return saved ? JSON.parse(saved) : [];
+            // Security: Use decryptStorageData which handles both encrypted and legacy plain JSON
+            return saved ? (decryptStorageData(saved) || []) : [];
         } catch (e) {
             console.error('Error parsing incidentLog from localStorage', e);
             return [];
@@ -70,7 +72,8 @@ const MainRoutes: React.FC = () => {
 
     // Persist incidentLog changes
     useEffect(() => {
-        localStorage.setItem('incidentLog', JSON.stringify(incidentLog));
+        // Security: Encrypt before saving to localStorage
+        localStorage.setItem('incidentLog', encryptStorageData(incidentLog));
     }, [incidentLog]);
 
     const [companyHolidays, setCompanyHolidays] = useState<CompanyHoliday[]>([]);

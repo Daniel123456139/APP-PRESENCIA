@@ -6,91 +6,16 @@ import { resolveTurno } from '../utils/turnoResolver';
 import { formatTimeRange } from '../utils/shiftClassifier';
 import { EXCLUDE_EMPLOYEE_IDS } from '../config/exclusions';
 import { toISODateLocal, parseISOToLocalDate, parseLocalDateTime } from '../utils/localDate';
-
-// Cache simple para evitar new Date repetidos si string es identico
-// DEFINICIÓN DE HORARIOS ESTÁTICOS (Hardcoded Shift Definitions)
-// Esto es necesario porque el parámetro 'shifts' contiene asignaciones, no definiciones de horario.
-const SHIFT_SPECS = [
-    { code: 'M', start: '07:00', end: '15:00' },
-    { code: 'T', start: '15:00', end: '23:00' },
-    { code: 'TN', start: '22:00', end: '06:00' },
-    { code: 'C', start: '08:00', end: '17:00' }, // Central
-    { code: 'N', start: '23:00', end: '07:00' }, // Noche
-    { code: 'V', start: '00:00', end: '00:00' }, // Vacaciones (virtual)
-    { code: 'L', start: '00:00', end: '00:00' }, // Libre (virtual)
-    { code: 'F', start: '00:00', end: '00:00' }, // Festivo (virtual)
-];
-
-const toMinutes = (hhmm: string): number => {
-    if (!hhmm) return 0;
-    const [h, m] = hhmm.split(':').map(Number);
-    return (h || 0) * 60 + (m || 0);
-};
-
-// Cache simple para evitar new Date repetidos si string es identico
-const dateCache = new Map<string, Date>();
-
-const parseDateTime = (date: string, time: string): Date => {
-    // Normalizar time a HH:MM:SS si viene HH:MM
-    const cleanTime = time.length === 5 ? `${time}:00` : time;
-    const key = `${date}T${cleanTime}`;
-    if (dateCache.has(key)) return new Date(dateCache.get(key)!);
-
-    const d = parseLocalDateTime(date, cleanTime);
-    if (dateCache.size < 1000) dateCache.set(key, d);
-    return d;
-};
-
-// Helper: Detecta si un registro es ENTRADA (soporta boolean true o number 1)
-const isEntrada = (entrada: boolean | number | string): boolean => {
-    return entrada === true || entrada === 1 || entrada === '1';
-};
-
-const isSalida = (entrada: boolean | number | string): boolean => {
-    return entrada === false || entrada === 0 || entrada === '0';
-};
-
-const getShiftByTime = (timeStr: string): string => {
-    const entryMin = toMinutes(timeStr);
-    let bestShift = 'M';
-    let minDiff = Infinity;
-
-    SHIFT_SPECS.forEach(s => {
-        // Ignorar turnos sin horario definido (V, L, F)
-        if (s.start === '00:00' && s.end === '00:00') return;
-
-        const shiftStart = toMinutes(s.start);
-        let diff = Math.abs(entryMin - shiftStart);
-
-        // HEURÍSTICA MEJORADA:
-        // Es más probable llegar tarde a un turno que ya empezó (entry > start)
-        // que llegar muy pronto a un turno futuro (entry < start).
-        // Penalizamos las llegadas tempranas ("Adelantos") multiplicando su diferencia.
-        // Ejemplo: Entrar 11:35. 
-        // Diff con M (07:00): ~4.5h. 
-        // Diff con T (15:00): ~3.5h. 
-        // Sin penalización ganaría T. Con penalización (3.5 * 3 > 10), gana M.
-        if (entryMin < shiftStart) {
-            diff = diff * 3;
-        }
-
-        if (diff < minDiff) {
-            minDiff = diff;
-            bestShift = s.code;
-        }
-    });
-    return bestShift;
-};
-
-const getOverlapHours = (start: Date, end: Date, targetStart: Date, targetEnd: Date): number => {
-    const overlapStart = start > targetStart ? start : targetStart;
-    const overlapEnd = end < targetEnd ? end : targetEnd;
-
-    if (overlapEnd > overlapStart) {
-        return (overlapEnd.getTime() - overlapStart.getTime()) / (1000 * 60 * 60);
-    }
-    return 0;
-};
+import { SHIFT_SPECS } from '../core/constants/shifts';
+import {
+    toMinutes,
+    parseDateTime,
+    clearDateCache,
+    isEntrada,
+    isSalida,
+    getShiftByTime,
+    getOverlapHours
+} from '../core/helpers/timeUtils';
 
 export const generateProcessedData = (
     rawData: RawDataRow[],
@@ -99,7 +24,7 @@ export const generateProcessedData = (
     settingsHolidays?: Set<string>,
     employeeCalendars?: Map<number, Map<string, number>> // Map<employeeId, Map<date, TipoDia>>
 ): Map<number, ProcessedDataRow> => {
-    dateCache.clear();
+    clearDateCache();
 
     const resultsMap = new Map<number, ProcessedDataRow>();
     const userMap = new Map(allUsers.map(u => [u.id, u]));
@@ -480,7 +405,7 @@ export const generateProcessedData = (
                         }
 
                         const durationMs = effectiveEnd.getTime() - effectiveStart.getTime();
-                        const durationHours = durationMs / 3600000;
+                        let durationHours = durationMs / 3600000;
 
                         // CRITICAL FIX: Detectar si es un par de justificación (Entrada -> SalidaConMotivo)
                         // Si es así, sumar a acumuladores de justificación y NO a horas de trabajo (horasDia/timeSlices)

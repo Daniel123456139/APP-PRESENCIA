@@ -114,7 +114,7 @@ export const fetchFichajes = async (
         const data = await response.json();
 
 
-        const mappedData = data.map((item: RawDataRow) => ({
+        const mappedData = data.map((item: any) => ({
             IDControlPresencia: item.IDControlPresencia || 0,
             DescDepartamento: item.DescDepartamento || 'General',
             IDOperario: typeof item.IDOperario === 'string' ? parseInt(item.IDOperario, 10) : item.IDOperario,

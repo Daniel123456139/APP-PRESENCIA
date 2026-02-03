@@ -10,13 +10,15 @@ export interface SickLeaveMetadata {
     confirmedByEmployee?: boolean;
 }
 
+import { encryptStorageData, decryptStorageData } from './encryptionService';
+
 const STORAGE_KEY = 'hr_app_sick_leave_metadata';
 
 export const SickLeaveMetadataService = {
     load(): Record<string, SickLeaveMetadata> {
         try {
             const data = localStorage.getItem(STORAGE_KEY);
-            return data ? JSON.parse(data) : {};
+            return data ? (decryptStorageData(data) || {}) : {};
         } catch (e) {
             console.error("Error loading sick leave metadata", e);
             return {};
@@ -31,7 +33,7 @@ export const SickLeaveMetadataService = {
                 const { doctorNotes, ...rest } = data[key];
                 safeData[key] = rest;
             }
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(safeData));
+            localStorage.setItem(STORAGE_KEY, encryptStorageData(safeData));
         } catch (e) {
             console.error("Error saving sick leave metadata", e);
         }
