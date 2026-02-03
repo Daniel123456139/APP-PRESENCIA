@@ -8,6 +8,7 @@ export enum Role {
 export interface User {
     id: number;
     name: string;
+    role: Role;
     department?: string;
     uid?: string;
     email?: string;
@@ -65,6 +66,8 @@ export interface UnjustifiedGap {
 export interface WorkdayDeviation {
     date: string;
     actualHours: number;
+    start?: string; // HH:MM
+    end?: string;   // HH:MM
 }
 
 export interface TimeSlice {

@@ -9,12 +9,20 @@ export interface ValidationIssue {
     date: string;
 }
 
+// Helper: Normalizar a HH:MM
+const normalizeTime = (timeStr: string): string => {
+    if (!timeStr) return '';
+    const cleaned = timeStr.replace(' (+1)', '').trim();
+    const match = cleaned.match(/(\d{2}):(\d{2})/);
+    if (!match) return '';
+    return `${match[1]}:${match[2]}`;
+};
+
 // Helper: Convertir HH:MM o HH:MM:SS a minutos desde media noche
 const timeToMinutes = (timeStr: string): number => {
-    if (!timeStr) return 0;
-    // Manejar formato ISO o HH:MM:SS
-    const cleanTime = timeStr.length > 8 ? timeStr.substring(11, 16) : timeStr.substring(0, 5);
-    const parts = cleanTime.split(':');
+    const normalized = normalizeTime(timeStr);
+    if (!normalized) return 0;
+    const parts = normalized.split(':');
     const h = parseInt(parts[0], 10);
     const m = parseInt(parts[1], 10);
     return h * 60 + m;
@@ -39,14 +47,24 @@ export const validateNewIncidents = (
         newRowsMap.get(key)!.push(row);
     }
 
-    // Preparar mapa de datos existentes para acceso rápido O(1)
-    // Map<"IDOperario|Fecha", RawDataRow[]>
+    // Optimized: First, identify which (Employee + Date) keys we actually care about
+    const relevantKeys = new Set(newRowsMap.keys());
+
+    // Preparar mapa de datos existentes pero SOLO para los días relevantes
+    // Esto evita procesar miles de filas históricas innecesarias
     const currentDataMap = new Map<string, RawDataRow[]>();
+
+    // Performance improvement: Iterate once, but skip unrelated rows immediately
     for (const row of currentData) {
+        // Construct key to check relevance
+        const key = `${row.IDOperario}|${row.Fecha}`;
+
+        // If this row doesn't belong to an employee/date we are validating, skip efficiently
+        if (!relevantKeys.has(key)) continue;
+
         // Si la fila está en ignoreSet, la saltamos (es como si ya no existiera)
         if (ignoreSet.has(`${row.IDOperario}-${row.Fecha}-${row.MotivoAusencia}-${row.Hora}`)) continue;
 
-        const key = `${row.IDOperario}|${row.Fecha}`;
         if (!currentDataMap.has(key)) currentDataMap.set(key, []);
         currentDataMap.get(key)!.push(row);
     }
@@ -101,12 +119,17 @@ export const validateNewIncidents = (
         const existingAbsences = existingDayRows.filter(r => r.Entrada === 0 && ![1, 14].includes(r.MotivoAusencia || 0));
 
         if (newAbsences.length > 0 && existingAbsences.length > 0) {
-            // Verificar si son parciales o totales
-            const isNewPartial = newAbsences.every(r => r.Inicio && r.Fin);
-            const isExistingPartial = existingAbsences.every(r => r.Inicio && r.Fin);
+            const isFullDayRow = (row: RawDataRow) => {
+                const hora = normalizeTime(row.Hora || '');
+                const inicio = normalizeTime(row.Inicio || '');
+                const fin = normalizeTime(row.Fin || '');
+                return hora === '00:00' && (!inicio || inicio === '00:00') && (!fin || fin === '00:00');
+            };
 
-            if (!isNewPartial || !isExistingPartial) {
-                // Si alguna es total y ya hay otra ausencia -> ERROR
+            const hasFullDayNew = newAbsences.some(isFullDayRow);
+            const hasFullDayExisting = existingAbsences.some(isFullDayRow);
+
+            if (hasFullDayNew || hasFullDayExisting) {
                 issues.push({
                     type: 'error',
                     code: 'OVERLAP',
@@ -115,33 +138,31 @@ export const validateNewIncidents = (
                     date: dateStr
                 });
             } else {
-                // Ambas son parciales -> Verificar horas
-                // --- REGLA 4: Solapamiento de Rangos Horarios (MODIFICADA: Cambio 3) ---
-                // NUEVO: Permitir misma incidencia si las horas son DIFERENTES
-                // Solo marcar error si es EXACTAMENTE el mismo código + mismo rango horario
-                const newIntervals = newAbsences.map(r => ({
-                    start: timeToMinutes(r.Inicio),
-                    end: timeToMinutes(r.Fin),
-                    desc: r.DescMotivoAusencia,
-                    motivoId: r.MotivoAusencia
-                }));
-                const existingIntervals = existingAbsences.map(r => ({
-                    start: timeToMinutes(r.Inicio),
-                    end: timeToMinutes(r.Fin),
-                    desc: r.DescMotivoAusencia,
-                    motivoId: r.MotivoAusencia
-                }));
+                const toInterval = (row: RawDataRow) => {
+                    const startStr = normalizeTime(row.Inicio || row.Hora || '');
+                    const endStr = normalizeTime(row.Fin || row.Hora || '');
+                    if (!startStr || !endStr) return null;
+                    let start = timeToMinutes(startStr);
+                    let end = timeToMinutes(endStr);
+                    if (end === start) end = start + 1;
+                    if (end < start) end += 1440;
+                    return {
+                        start,
+                        end,
+                        desc: row.DescMotivoAusencia,
+                        motivoId: row.MotivoAusencia
+                    };
+                };
+
+                const newIntervals = newAbsences.map(toInterval).filter(Boolean) as { start: number; end: number; desc: string; motivoId: number | null }[];
+                const existingIntervals = existingAbsences.map(toInterval).filter(Boolean) as { start: number; end: number; desc: string; motivoId: number | null }[];
 
                 for (const newInt of newIntervals) {
                     for (const existInt of existingIntervals) {
-                        // NUEVA LÓGICA: Solo es ERROR si:
-                        // 1. Mismo código de incidencia
-                        // 2. Y mismo rango horario (exacto o con solapamiento)
                         const isSameCode = newInt.motivoId === existInt.motivoId;
                         const hasOverlap = newInt.start < existInt.end && newInt.end > existInt.start;
 
                         if (isSameCode && hasOverlap) {
-                            // Mismo código con solapamiento -> ERROR
                             issues.push({
                                 type: 'error',
                                 code: 'PARTIAL_OVERLAP',
@@ -150,7 +171,6 @@ export const validateNewIncidents = (
                                 date: dateStr
                             });
                         } else if (!isSameCode && hasOverlap) {
-                            // Diferentes códigos con solapamiento -> WARNING (puede ser válido)
                             issues.push({
                                 type: 'warning',
                                 code: 'PARTIAL_OVERLAP',
@@ -159,7 +179,6 @@ export const validateNewIncidents = (
                                 date: dateStr
                             });
                         }
-                        // Si es mismo código pero sin solapamiento -> OK (permitido)
                     }
                 }
             }

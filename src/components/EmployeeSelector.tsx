@@ -27,8 +27,8 @@ const EmployeeSelector: React.FC<EmployeeSelectorProps> = ({ erpData, onSelect }
     }, [erpData]);
 
     const filteredEmployees = useMemo(() => {
-        return employees.filter(emp => 
-            emp.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+        return employees.filter(emp =>
+            emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
             String(emp.id).includes(searchTerm)
         );
     }, [employees, searchTerm]);
@@ -57,7 +57,7 @@ const EmployeeSelector: React.FC<EmployeeSelectorProps> = ({ erpData, onSelect }
                         onChange={(e) => setSearchTerm(e.target.value)}
                         className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:outline-none mb-4"
                     />
-                    
+
                     <div className="max-h-60 overflow-y-auto border border-slate-200 rounded-lg">
                         {filteredEmployees.length > 0 ? (
                             filteredEmployees.map(emp => (

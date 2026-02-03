@@ -153,6 +153,7 @@ const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange,
             <div className="w-32 px-4 text-right text-blue-600 font-mono">{row.horasJustificadas.toFixed(2)} h</div>
             <div className="w-32 px-4 text-right font-bold font-mono">{row.horasTotalesConJustificacion.toFixed(2)} h</div>
             <div className="w-32 px-4 text-right text-orange-600 font-mono">{row.horasExceso.toFixed(2)} h</div>
+            <div className="w-32 px-4 text-right text-purple-600 font-mono">{row.festivas ? row.festivas.toFixed(2) : '0.00'} h</div>
             <div className="w-32 px-4 text-right">{`${row.numTAJ} / ${row.hTAJ.toFixed(2)}`}</div>
             {isLongRange && (
                 <div className="w-32 px-4 text-center">
@@ -244,7 +245,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                     valA = turnoRank(a.turnoAsignado);
                     valB = turnoRank(b.turnoAsignado);
                     isNumeric = true;
-                } else if (['operario', 'presencia', 'totalHoras', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'hTAJ', 'numTAJ', 'incidentCount'].includes(key as string)) {
+                } else if (['operario', 'presencia', 'totalHoras', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'hTAJ', 'numTAJ', 'incidentCount', 'festivas'].includes(key as string)) {
                     isNumeric = true;
                 }
 
@@ -295,6 +296,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                 <TableHeader colKey="horasJustificadas" label="JUSTIFICADAS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="horasTotalesConJustificacion" label="TOTAL" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="horasExceso" label="EXCESOS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
+                <TableHeader colKey="festivas" label="FESTIVAS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="hTAJ" label="TAJ" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 {isLongRange && (
                     <TableHeader colKey="absentDays" label="AUSENCIAS" width="w-32" align="center" sortConfig={sortConfig} onSort={handleSort} />

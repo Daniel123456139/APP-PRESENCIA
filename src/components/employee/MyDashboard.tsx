@@ -51,27 +51,27 @@ const MyDashboard: React.FC<MyDashboardProps> = ({ shifts }) => {
         if (!auth?.user) return [];
         const today = new Date();
         const nextWeek = [];
-        
+
         for (let i = 0; i < 7; i++) {
             const d = new Date(today);
             d.setDate(today.getDate() + i);
             const dateStr = toISODateLocal(d);
-            
+
             // Check for manual override first (shifts from props/store)
             const manualShift = shifts.find(s => s.operarioId === auth.user?.id && s.date === dateStr);
             let shiftCode = manualShift ? manualShift.shiftCode : 'L'; // Default to Libre if unknown
 
             // Try to use backend turno if no manual shift
             if (!manualShift) {
-                 const row = erpData.find(r => r.IDOperario === auth.user?.id && r.Fecha === dateStr);
-                 if (row) {
-                     const { code } = resolveTurno(row);
-                     if (code !== 'UNKNOWN') {
-                         shiftCode = code;
-                     }
-                 }
+                const row = erpData.find(r => r.IDOperario === auth.user?.id && r.Fecha === dateStr);
+                if (row) {
+                    const { code } = resolveTurno(row);
+                    if (code !== 'UNKNOWN') {
+                        shiftCode = code;
+                    }
+                }
             }
-            
+
             nextWeek.push({ date: dateStr, code: shiftCode });
         }
         return nextWeek;
@@ -94,7 +94,7 @@ const MyDashboard: React.FC<MyDashboardProps> = ({ shifts }) => {
                     Turno: {myData.turnoAsignado === 'TN' ? 'Tarde' : (myData.turnoAsignado === 'M' ? 'Mañana' : myData.turnoAsignado)}
                 </span>
             </div>
-            
+
             {/* Shifts Section */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
                 <h2 className="text-lg font-semibold text-slate-700 mb-4">Mis Próximos Turnos</h2>
@@ -107,19 +107,19 @@ const MyDashboard: React.FC<MyDashboardProps> = ({ shifts }) => {
 
             {/* KPI Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                <DataCard 
-                    title="Total Horas (Periodo)" 
-                    value={myData.totalHoras.toFixed(2)} 
+                <DataCard
+                    title="Total Horas (Periodo)"
+                    value={myData.totalHoras.toFixed(2)}
                     subtext="Horas trabajadas en el periodo seleccionado"
                 />
-                <DataCard 
-                    title="Días de Vacaciones Restantes" 
-                    value={myData.dispVacaciones} 
+                <DataCard
+                    title="Días de Vacaciones Restantes"
+                    value={myData.dispVacaciones}
                     subtext={`${myData.acumVacaciones} día(s) tomados este año`}
                 />
-                <DataCard 
-                    title="Horas de Médico Disponibles" 
-                    value={myData.dispMedico.toFixed(2)} 
+                <DataCard
+                    title="Horas de Médico Disponibles"
+                    value={myData.dispMedico.toFixed(2)}
                     subtext={`${myData.acumMedico.toFixed(2)}h usadas este año`}
                 />
             </div>
@@ -136,7 +136,7 @@ const MyDashboard: React.FC<MyDashboardProps> = ({ shifts }) => {
                             </div>
                         </div>
                         <div className="flex justify-between items-center p-3 bg-slate-50 rounded-lg">
-                             <span className="text-slate-600">Retrasos</span>
+                            <span className="text-slate-600">Retrasos</span>
                             <div className="text-right">
                                 <span className="block font-bold text-slate-800">{myData.numRetrasos} veces</span>
                                 <span className="text-xs text-slate-500">{myData.tiempoRetrasos.toFixed(2)}h total</span>
@@ -156,7 +156,7 @@ const MyDashboard: React.FC<MyDashboardProps> = ({ shifts }) => {
                         <div className="p-2 border rounded-lg">
                             <p className="text-slate-500 text-xs uppercase">H. Ley Familias</p>
                             <p className="font-bold text-lg text-slate-800">{myData.dispHLF.toFixed(1)}h</p>
-                             <p className="text-xs text-slate-400">Restantes</p>
+                            <p className="text-xs text-slate-400">Restantes</p>
                         </div>
                     </div>
                 </div>

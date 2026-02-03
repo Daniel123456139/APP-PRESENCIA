@@ -4,9 +4,10 @@ import { getControlOfPorOperario } from '../services/erpApi';
 import { JobControlEntry, RawDataRow } from '../types';
 import { format, differenceInMinutes } from 'date-fns';
 import { useNotification } from '../components/shared/NotificationContext';
-import { ChevronDown, ChevronUp, RefreshCw, AlertTriangle, Smartphone, Layers, Search, PieChart, FileText, BarChart3 } from 'lucide-react';
-import { exportImproductiveRankingToPDF, exportWeeklyJobAuditToPDF } from '../services/jobAuditExportService';
+import { ChevronDown, ChevronUp, RefreshCw, AlertTriangle, Smartphone, Layers, Search, PieChart, FileText, BarChart3, CheckCircle2, Clock } from 'lucide-react';
+import { exportImproductiveRankingToPDF, exportWeeklyJobAuditToPDF, exportImproductiveByArticleToPDF } from '../services/jobAuditExportService';
 import { getImproductiveArticle } from '../data/improductiveArticles';
+import { ProductivityDashboard } from '../components/hr/ProductivityDashboard';
 
 /**
  * Helper para parsear fechas del ERP (dd/MM/yyyy + HH:mm:ss)
@@ -81,15 +82,32 @@ interface JobManagementProps {
 }
 
 export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, initialEndDate }) => {
-    const [startDate, setStartDate] = useState(initialStartDate || format(new Date(), 'yyyy-MM-dd'));
-    const [endDate, setEndDate] = useState(initialEndDate || format(new Date(), 'yyyy-MM-dd'));
+    // PERSISTENCE KEYS
+    const STORAGE_KEY = 'jobAuditState';
+
+    // 1. Initialize State from Storage if available
+    const getStoredState = () => {
+        try {
+            const saved = sessionStorage.getItem(STORAGE_KEY);
+            return saved ? JSON.parse(saved) : null;
+        } catch (e) {
+            console.error("Error reading jobAuditState", e);
+            return null;
+        }
+    };
+
+    const storedState = getStoredState();
+
+    const [startDate, setStartDate] = useState(initialStartDate || storedState?.startDate || format(new Date(), 'yyyy-MM-dd'));
+    const [endDate, setEndDate] = useState(initialEndDate || storedState?.endDate || format(new Date(), 'yyyy-MM-dd'));
     const [showDebug, setShowDebug] = useState(false);
     const [searchFilter, setSearchFilter] = useState<string>('');
     const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<Set<number>>(new Set());
     const [sortKey, setSortKey] = useState<'gap' | 'worked' | 'empId' | 'name'>('gap');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+    const [showDashboard, setShowDashboard] = useState(false);
 
-    // Sincronizar con fechas globales si cambian
+    // Sincronizar con fechas globales si cambian (solo si se proveen props explícitas)
     useEffect(() => {
         if (initialStartDate) setStartDate(initialStartDate);
         if (initialEndDate) setEndDate(initialEndDate);
@@ -119,9 +137,27 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
     });
 
     const { showNotification } = useNotification();
-    const [jobData, setJobData] = useState<Record<string, JobControlEntry[]>>({});
+    const [jobData, setJobData] = useState<Record<string, JobControlEntry[]>>(storedState?.jobData || {});
     const [loadingJobs, setLoadingJobs] = useState(false);
     const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+    // 2. Restore selectedDepartment on mount if exists in storage
+    useEffect(() => {
+        if (storedState?.selectedDepartment && storedState.selectedDepartment !== 'all') {
+            setSelectedDepartment(storedState.selectedDepartment);
+        }
+    }, []); // Run once on mount
+
+    // 3. Persist State Changes
+    useEffect(() => {
+        const stateToSave = {
+            startDate,
+            endDate,
+            selectedDepartment,
+            jobData
+        };
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+    }, [startDate, endDate, selectedDepartment, jobData]);
     const abortControllerRef = useRef<AbortController | null>(null);
 
     const productiveEmployees = useMemo(() => {
@@ -308,7 +344,16 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
         }
     };
 
+    // Clear job data ONLY when dates change actively, not on initial mount if restored
+    const isFirstRun = useRef(true);
     useEffect(() => {
+        if (isFirstRun.current) {
+            isFirstRun.current = false;
+            // If we have restored data, don't clear it.
+            if (Object.keys(storedState?.jobData || {}).length > 0) {
+                return;
+            }
+        }
         setJobData({});
     }, [startDate, endDate]);
 
@@ -523,7 +568,57 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             showNotification('✅ Reporte PDF generado correctamente', 'success');
         } catch (error) {
             console.error('Error exportando PDF:', error);
-            showNotification('❌ Error al generar el reporte PDF', 'error');
+            showNotification('❌ Error al generar el ranking', 'error');
+        }
+    };
+
+    const handleExportImproductiveByArticle = async () => {
+        try {
+            showNotification('Generando informe de actividades...', 'info');
+
+            // Aggregate by Article
+            const articleMap = new Map<string, { name: string; hours: number; count: number }>();
+
+            filteredRows.forEach(row => {
+                row.jobs.forEach(job => {
+                    const article = getImproductiveArticle(job.IDArticulo);
+                    if (article) {
+                        const s = parseErpDateTime(job.FechaInicio, job.HoraInicio);
+                        const e = parseErpDateTime(job.FechaFin, job.HoraFin);
+                        if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
+                            const d = differenceInMinutes(e, s) / 60; // hours
+                            if (d > 0) {
+                                const key = job.IDArticulo;
+                                const current = articleMap.get(key) || { name: article.desc, hours: 0, count: 0 };
+                                current.hours += d;
+                                current.count += 1;
+                                articleMap.set(key, current);
+                            }
+                        }
+                    }
+                });
+            });
+
+            const totalImproductiveHours = Array.from(articleMap.values()).reduce((acc, v) => acc + v.hours, 0);
+
+            const articleRows = Array.from(articleMap.entries()).map(([id, data]) => ({
+                articleId: id,
+                articleName: data.name,
+                totalHours: data.hours,
+                percentOfTotalImproductive: totalImproductiveHours > 0 ? (data.hours / totalImproductiveHours) * 100 : 0,
+                occurrenceCount: data.count
+            })).sort((a, b) => b.totalHours - a.totalHours);
+
+            await exportImproductiveByArticleToPDF(articleRows, {
+                startDate,
+                endDate,
+                department: selectedDepartment
+            });
+
+            showNotification('✅ Informe de actividades exportado', 'success');
+        } catch (error) {
+            console.error('Error exportando informe actividades:', error);
+            showNotification('❌ Error al generar el informe', 'error');
         }
     };
 
@@ -556,11 +651,9 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             showNotification('❌ Error al exportar el ranking de improductivos', 'error');
         }
     };
-
     return (
-        <div className="p-6 bg-slate-50 min-h-screen font-sans text-slate-900">
-            {/* Header - STICKY para mantener filtros visibles */}
-            <header className="sticky top-0 z-20 mb-8 p-6 bg-white rounded-2xl shadow-sm border border-slate-100">
+        <div className="p-8 bg-slate-50 min-h-screen">
+            <header className="mb-8">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                     <div>
                         <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-red-600 to-orange-600 flex items-center gap-2">
@@ -664,25 +757,51 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                             {isReloading ? 'Calculando Presencia...' : (loadingJobs ? 'Analizando Trabajos...' : 'Auditar')}
                         </button>
 
-                        <button
-                            onClick={handleExportPDF}
-                            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium shadow-md shadow-emerald-200 transition-all hover:-translate-y-0.5"
-                        >
-                            <FileText className="w-4 h-4" />
-                            Exportar PDF
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-100/50 rounded-xl border border-slate-200/60 shadow-inner">
+                            <div className="flex flex-col mr-2">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter leading-none mb-1">Herramientas de</span>
+                                <span className="text-xs font-black text-indigo-600 uppercase tracking-wider leading-none">Exportación</span>
+                            </div>
+
+                            <button
+                                onClick={handleExportPDF}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
+                                title="Informe General de Presencia"
+                            >
+                                <FileText className="w-3.5 h-3.5" />
+                                General
+                            </button>
+
+                            <button
+                                onClick={handleExportImproductiveRanking}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
+                                title="Ranking de Empleados Improductivos"
+                            >
+                                <BarChart3 className="w-3.5 h-3.5" />
+                                Ranking
+                            </button>
+
+                            <button
+                                onClick={handleExportImproductiveByArticle}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
+                                title="Informe de Actividades Improductivas"
+                            >
+                                <Layers className="w-3.5 h-3.5" />
+                                Actividades
+                            </button>
+                        </div>
 
                         <button
-                            onClick={handleExportImproductiveRanking}
-                            className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-medium shadow-md shadow-amber-200 transition-all hover:-translate-y-0.5"
+                            onClick={() => setShowDashboard(true)}
+                            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-100 transition-all hover:-translate-y-0.5 hover:shadow-xl active:scale-95 animate-pulse"
                         >
-                            <BarChart3 className="w-4 h-4" />
-                            Ranking Improductivos
+                            <PieChart className="w-4 h-4" />
+                            DASHBOARD INTERACTIVO
                         </button>
 
                         <button
                             onClick={() => setShowDebug(!showDebug)}
-                            className="text-xs text-slate-400 underline ml-2"
+                            className="text-xs text-slate-400 hover:text-slate-600 font-medium px-2"
                         >
                             {showDebug ? 'Ocultar Debug' : 'Debug'}
                         </button>
@@ -691,9 +810,9 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             </header>
 
             {/* Global Summary Stats - NUEVO */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8 mt-4 animate-fadeIn">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8 mt-4 animate-fadeIn">
                 {/* Ocupación Global (Donut Chart) */}
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-6 transition-all hover:shadow-md">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-6 transition-all hover:shadow-md col-span-1 md:col-span-1">
                     <div className="relative w-24 h-24 flex-shrink-0">
                         <svg className="w-full h-full transform -rotate-90">
                             <circle
@@ -726,271 +845,293 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">Ocupación Dept.</h3>
                         <p className="text-2xl font-black text-slate-800">{globalStats.totalCovered.toFixed(1)}h</p>
                         <p className="text-[10px] text-slate-500 mt-1 uppercase font-bold tracking-tighter">De {globalStats.totalPresence.toFixed(1)}h totales</p>
-                        {globalStats.totalImproductiveProduced > 0 && (
-                            <p className="text-[10px] text-amber-700 mt-1 uppercase font-bold tracking-tighter">
-                                Improductivo {globalStats.totalImproductiveProduced.toFixed(1)}h
+                    </div>
+                </div>
+
+                {/* KPI BLOCKS */}
+                <div className="col-span-1 md:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* 1. Tiempo Productivo */}
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-center relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 p-3 opacity-10">
+                            <CheckCircle2 className="w-16 h-16 text-emerald-600" />
+                        </div>
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">Tiempo Productivo</h3>
+                        <div className="flex items-baseline gap-2">
+                            <p className="text-3xl font-black text-emerald-600">
+                                {(globalStats.totalCovered - globalStats.totalImproductiveProduced).toFixed(1)}h
                             </p>
-                        )}
+                            <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                                {globalStats.totalPresence > 0 ? (((globalStats.totalCovered - globalStats.totalImproductiveProduced) / globalStats.totalPresence) * 100).toFixed(0) : 0}%
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">Trabajo real efectivo (neto)</p>
                     </div>
-                </div>
 
-                {/* Horas Sin Imputar */}
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4 transition-all hover:shadow-md">
-                    <div className="p-3 bg-red-50 rounded-xl text-red-600">
-                        <AlertTriangle className="w-8 h-8" />
+                    {/* 2. Tiempo Improductivo */}
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-center relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 p-3 opacity-10">
+                            <Clock className="w-16 h-16 text-amber-600" />
+                        </div>
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">Tiempo Improductivo</h3>
+                        <div className="flex items-baseline gap-2">
+                            <p className="text-3xl font-black text-amber-600">{globalStats.totalImproductiveProduced.toFixed(1)}h</p>
+                            <span className="text-xs font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                                {globalStats.totalPresence > 0 ? ((globalStats.totalImproductiveProduced / globalStats.totalPresence) * 100).toFixed(0) : 0}%
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">Limpieza, Mantenimiento, etc.</p>
                     </div>
-                    <div>
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-none mb-2 text-right">Fuga de Tiempo</h3>
-                        <p className="text-3xl font-black text-red-600 text-right">{globalStats.totalGap.toFixed(1)}h</p>
-                        <p className="text-[10px] text-slate-400 text-right mt-1">Horas en planta sin orden de trabajo</p>
-                    </div>
-                </div>
 
-                {/* Info de Sección */}
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-4 transition-all hover:shadow-md">
-                    <div className="p-3 bg-emerald-50 rounded-xl text-emerald-600">
-                        <PieChart className="w-8 h-8" />
-                    </div>
-                    <div className="flex-1 text-right">
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">Eficiencia Media</h3>
-                        <p className="text-3xl font-black text-emerald-600">
-                            {comparisonRows.length > 0 ? (globalStats.totalCovered / comparisonRows.length).toFixed(1) : '0'}h
-                        </p>
-                        <p className="text-[10px] text-slate-400 mt-1">Imputación media por operario</p>
+                    {/* 3. Tiempo No Empleado (GAP) */}
+                    <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-center relative overflow-hidden group">
+                        <div className="absolute top-0 right-0 p-3 opacity-10">
+                            <AlertTriangle className="w-16 h-16 text-red-600" />
+                        </div>
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-none mb-2">No Cubierto (GAP)</h3>
+                        <div className="flex items-baseline gap-2">
+                            <p className="text-3xl font-black text-red-600">{globalStats.totalGap.toFixed(1)}h</p>
+                            <span className="text-xs font-bold text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
+                                {globalStats.totalPresence > 0 ? ((globalStats.totalGap / globalStats.totalPresence) * 100).toFixed(0) : 0}%
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-1">Tiempo pagado sin actividad</p>
                     </div>
                 </div>
             </div>
 
             {/* List */}
-            <div className="space-y-4">
-                {filteredRows.length === 0 && comparisonRows.length > 0 && (
-                    <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 border-dashed">
-                        <p className="text-slate-400 font-medium">No se encontraron empleados que coincidan con la búsqueda "{searchFilter}"</p>
-                        <button
-                            onClick={() => setSearchFilter('')}
-                            className="mt-3 text-sm text-blue-600 hover:underline"
-                        >
-                            Limpiar búsqueda
-                        </button>
-                    </div>
-                )}
-                {sortedRows.map(({ emp, totalPresence, totalTimeCovered, totalJobTimeProduced, improductiveTimeProduced, jobs, timeGap, overlapRatio, vacationDays, sickLeaveHours, sickLeaveType, recordedIncidents }) => {
-                    const isMissingJobs = totalPresence > 0.5 && totalTimeCovered === 0;
-                    const isBigGap = timeGap > 0.5; // > 30 min gap
-                    const hasHighOverlap = overlapRatio > 1.1; // > 10% parallel work
-                    const hasPresence = totalPresence > 0.05;
-                    const hasCoverage = totalTimeCovered > 0.05;
-                    const hasOverCoverage = totalTimeCovered > totalPresence + 0.05;
-                    const isNoPresenceButWork = !hasPresence && hasCoverage;
-                    const hasVacation = vacationDays > 0;
-                    const hasSickLeave = sickLeaveHours > 0;
-                    const hasRecordedIncidents = recordedIncidents.length > 0;
-                    const gapLabel = isNoPresenceButWork
-                        ? 'SIN JORNADA'
-                        : hasOverCoverage
-                            ? 'REVISION'
-                            : timeGap > 0.05
-                                ? timeGap.toFixed(2) + 'h'
-                                : 'OK';
-                    const gapClass = (isNoPresenceButWork || hasOverCoverage)
-                        ? 'text-amber-600'
-                        : isBigGap
-                            ? 'text-red-500'
-                            : 'text-slate-300';
-
-                    return (
-                        <div key={emp.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:shadow-md group">
-                            <div
-                                className="p-5 cursor-pointer flex flex-col lg:flex-row gap-6 items-center"
-                                onClick={() => toggleExpand(emp.id)}
+            < div className="space-y-4" >
+                {
+                    filteredRows.length === 0 && comparisonRows.length > 0 && (
+                        <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 border-dashed">
+                            <p className="text-slate-400 font-medium">No se encontraron empleados que coincidan con la búsqueda "{searchFilter}"</p>
+                            <button
+                                onClick={() => setSearchFilter('')}
+                                className="mt-3 text-sm text-blue-600 hover:underline"
                             >
-                                {/* Operario Info */}
-                                <div className="w-full lg:w-1/4 flex items-center gap-4">
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shadow-inner transition-colors duration-500
+                                Limpiar búsqueda
+                            </button>
+                        </div>
+                    )
+                }
+                {
+                    sortedRows.map(({ emp, totalPresence, totalTimeCovered, totalJobTimeProduced, improductiveTimeProduced, jobs, timeGap, overlapRatio, vacationDays, sickLeaveHours, sickLeaveType, recordedIncidents }) => {
+                        const isMissingJobs = totalPresence > 0.5 && totalTimeCovered === 0;
+                        const isBigGap = timeGap > 0.5; // > 30 min gap
+                        const hasHighOverlap = overlapRatio > 1.1; // > 10% parallel work
+                        const hasPresence = totalPresence > 0.05;
+                        const hasCoverage = totalTimeCovered > 0.05;
+                        const hasOverCoverage = totalTimeCovered > totalPresence + 0.05;
+                        const isNoPresenceButWork = !hasPresence && hasCoverage;
+                        const hasVacation = vacationDays > 0;
+                        const hasSickLeave = sickLeaveHours > 0;
+                        const hasRecordedIncidents = recordedIncidents.length > 0;
+                        const gapLabel = isNoPresenceButWork
+                            ? 'SIN JORNADA'
+                            : hasOverCoverage
+                                ? 'REVISION'
+                                : timeGap > 0.05
+                                    ? timeGap.toFixed(2) + 'h'
+                                    : 'OK';
+                        const gapClass = (isNoPresenceButWork || hasOverCoverage)
+                            ? 'text-amber-600'
+                            : isBigGap
+                                ? 'text-red-500'
+                                : 'text-slate-300';
+
+                        return (
+                            <div key={emp.id} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:shadow-md group">
+                                <div
+                                    className="p-5 cursor-pointer flex flex-col lg:flex-row gap-6 items-center"
+                                    onClick={() => toggleExpand(emp.id)}
+                                >
+                                    {/* Operario Info */}
+                                    <div className="w-full lg:w-1/4 flex items-center gap-4">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shadow-inner transition-colors duration-500
                                         ${isMissingJobs || isBigGap ? 'bg-red-100 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                        {emp.id}
-                                    </div>
-                                    <div>
-                                        <h3 className="font-bold text-slate-800 text-lg leading-tight group-hover:text-indigo-600 transition-colors">{emp.name}</h3>
-                                        <div className="flex items-center gap-2 mt-1">
-                                            <span className="text-slate-500 text-xs font-medium bg-slate-100 px-2 py-0.5 rounded-md">{emp.department}</span>
-                                            {hasHighOverlap && <span className="text-amber-600 text-[10px] font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100">MULTITASK x{overlapRatio.toFixed(1)}</span>}
-                                            {improductiveTimeProduced > 0 && (
-                                                <span className="text-amber-700 text-[10px] font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                                                    IMPROD. {improductiveTimeProduced.toFixed(2)}h
-                                                </span>
-                                            )}
-                                            {showDebug && <span className="text-xs font-mono text-purple-600 ml-2">[{jobs.length} regs / ID:{emp.id}]</span>}
+                                            {emp.id}
                                         </div>
-                                    </div>
-                                </div>
-
-                                {/* Bars Visualization */}
-                                <div className="w-full lg:flex-1 flex flex-col gap-3 relative">
-                                    {/* Presencia (Jornada) */}
-                                    <div className="flex items-center gap-3 relative z-10">
-                                        <div className="w-24 text-xs font-bold text-slate-500 text-right uppercase tracking-wider">Jornada</div>
-                                        <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden relative shadow-inner">
-                                            <div
-                                                className="h-full bg-emerald-500 rounded-full relative"
-                                                style={{ width: `${Math.min((totalPresence / 10) * 100, 100)}%` }}
-                                            ></div>
-                                        </div>
-                                        <div className="w-16 text-right font-mono font-bold text-emerald-600 text-sm">
-                                            {totalPresence.toFixed(2)}h
+                                        <div>
+                                            <h3 className="font-bold text-slate-800 text-lg leading-tight group-hover:text-indigo-600 transition-colors">{emp.name}</h3>
+                                            <div className="flex items-center gap-2 mt-1">
+                                                <span className="text-slate-500 text-xs font-medium bg-slate-100 px-2 py-0.5 rounded-md">{emp.department}</span>
+                                                {hasHighOverlap && <span className="text-amber-600 text-[10px] font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-100">MULTITASK x{overlapRatio.toFixed(1)}</span>}
+                                                {improductiveTimeProduced > 0 && (
+                                                    <span className="text-amber-700 text-[10px] font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                                        IMPROD. {improductiveTimeProduced.toFixed(2)}h
+                                                    </span>
+                                                )}
+                                                {showDebug && <span className="text-xs font-mono text-purple-600 ml-2">[{jobs.length} regs / ID:{emp.id}]</span>}
+                                            </div>
                                         </div>
                                     </div>
 
-                                    {/* Cobertura (Tiempo Tocado) */}
-                                    <div className="flex items-center gap-3 relative z-10">
-                                        <div className="w-24 text-xs font-bold text-slate-500 text-right uppercase tracking-wider">Ocupación</div>
-                                        <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden relative shadow-inner">
-                                            {/* Fondo: Total Producido (Opaco) */}
-                                            <div
-                                                className="absolute top-0 left-0 h-full bg-blue-200/50"
-                                                style={{ width: `${Math.min((totalJobTimeProduced / 10) * 100, 100)}%` }}
-                                            ></div>
-                                            {/* Frente: Cobertura Real (Sólido) */}
-                                            <div
-                                                className="h-full bg-blue-600 rounded-full relative"
-                                                style={{ width: `${Math.min((totalTimeCovered / 10) * 100, 100)}%` }}
-                                            ></div>
+                                    {/* Bars Visualization */}
+                                    <div className="w-full lg:flex-1 flex flex-col gap-3 relative">
+                                        {/* Presencia (Jornada) */}
+                                        <div className="flex items-center gap-3 relative z-10">
+                                            <div className="w-24 text-xs font-bold text-slate-500 text-right uppercase tracking-wider">Jornada</div>
+                                            <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden relative shadow-inner">
+                                                <div
+                                                    className="h-full bg-emerald-500 rounded-full relative"
+                                                    style={{ width: `${Math.min((totalPresence / 10) * 100, 100)}%` }}
+                                                ></div>
+                                            </div>
+                                            <div className="w-16 text-right font-mono font-bold text-emerald-600 text-sm">
+                                                {totalPresence.toFixed(2)}h
+                                            </div>
                                         </div>
-                                        <div className="w-16 text-right font-mono font-bold text-blue-600 text-sm">
-                                            {totalTimeCovered.toFixed(2)}h
-                                        </div>
-                                    </div>
 
-                                    {(hasVacation || hasSickLeave || hasRecordedIncidents) && (
-                                        <div className="flex flex-wrap gap-2 text-[11px]">
-                                            {hasVacation && (
-                                                <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded border border-emerald-100 font-semibold">
-                                                    Vacaciones {vacationDays}d
-                                                </span>
-                                            )}
-                                            {hasSickLeave && (
-                                                <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded border border-rose-100 font-semibold">
-                                                    Baja {sickLeaveType || 'IT'} {sickLeaveHours.toFixed(1)}h
-                                                </span>
-                                            )}
-                                            {recordedIncidents.map((inc, idx) => (
-                                                <span key={`${emp.id}-inc-${idx}`} className="bg-blue-50 text-blue-700 px-2 py-1 rounded border border-blue-100 font-semibold">
-                                                    {formatShortDate(inc.date)} · INC {String(inc.motivoId).padStart(2, '0')} · {inc.start}-{inc.end}{inc.endsNextDay ? ' (+1)' : ''} · {inc.durationHoursInt}h
-                                                </span>
-                                            ))}
+                                        {/* Cobertura (Tiempo Tocado) */}
+                                        <div className="flex items-center gap-3 relative z-10">
+                                            <div className="w-24 text-xs font-bold text-slate-500 text-right uppercase tracking-wider">Ocupación</div>
+                                            <div className="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden relative shadow-inner">
+                                                {/* Fondo: Total Producido (Opaco) */}
+                                                <div
+                                                    className="absolute top-0 left-0 h-full bg-blue-200/50"
+                                                    style={{ width: `${Math.min((totalJobTimeProduced / 10) * 100, 100)}%` }}
+                                                ></div>
+                                                {/* Frente: Cobertura Real (Sólido) */}
+                                                <div
+                                                    className="h-full bg-blue-600 rounded-full relative"
+                                                    style={{ width: `${Math.min((totalTimeCovered / 10) * 100, 100)}%` }}
+                                                ></div>
+                                            </div>
+                                            <div className="w-16 text-right font-mono font-bold text-blue-600 text-sm">
+                                                {totalTimeCovered.toFixed(2)}h
+                                            </div>
                                         </div>
-                                    )}
-                                </div>
 
-                                {/* Summary & Alerts */}
-                                <div className="w-full lg:w-1/5 flex justify-end items-center gap-4 border-l border-slate-100 pl-6">
-                                    <div className="text-right bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
-                                        <div className="text-[10px] text-amber-600 font-bold uppercase tracking-widest mb-1">Improductivo</div>
-                                        <div className={`text-xl font-black ${improductiveTimeProduced > 0 ? 'text-amber-600' : 'text-slate-300'}`}>
-                                            {improductiveTimeProduced.toFixed(2)}h
-                                        </div>
-                                    </div>
-                                    <div className="text-right">
-                                        <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Sin Cubrir</div>
-                                        <div className={`text-2xl font-black ${gapClass}`}>
-                                            {gapLabel}
-                                        </div>
-                                    </div>
-                                    <div className="w-8 flex justify-center">
-                                        {expandedRows.has(emp.id) ? (
-                                            <ChevronUp className="w-5 h-5 text-slate-400" />
-                                        ) : (
-                                            <ChevronDown className="w-5 h-5 text-slate-400" />
+                                        {(hasVacation || hasSickLeave || hasRecordedIncidents) && (
+                                            <div className="flex flex-wrap gap-2 text-[11px]">
+                                                {hasVacation && (
+                                                    <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded border border-emerald-100 font-semibold">
+                                                        Vacaciones {vacationDays}d
+                                                    </span>
+                                                )}
+                                                {hasSickLeave && (
+                                                    <span className="bg-rose-50 text-rose-700 px-2 py-1 rounded border border-rose-100 font-semibold">
+                                                        Baja {sickLeaveType || 'IT'} {sickLeaveHours.toFixed(1)}h
+                                                    </span>
+                                                )}
+                                                {recordedIncidents.map((inc, idx) => (
+                                                    <span key={`${emp.id}-inc-${idx}`} className="bg-blue-50 text-blue-700 px-2 py-1 rounded border border-blue-100 font-semibold">
+                                                        {formatShortDate(inc.date)} · INC {String(inc.motivoId).padStart(2, '0')} · {inc.start}-{inc.end}{inc.endsNextDay ? ' (+1)' : ''} · {inc.durationHoursInt}h
+                                                    </span>
+                                                ))}
+                                            </div>
                                         )}
                                     </div>
-                                </div>
-                            </div>
 
-                            {/* Alerts Banner */}
-                            {(isMissingJobs || isBigGap || hasOverCoverage) && (
-                                <div className="px-5 pb-3 flex flex-wrap gap-2 text-xs">
-                                    {isMissingJobs && <span className="bg-red-50 text-red-700 px-2 py-1 rounded border border-red-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> SIN IMPUTACIONES</span>}
-                                    {isBigGap && totalTimeCovered > 0 && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> HUECO DE {timeGap.toFixed(2)}h</span>}
-                                    {isNoPresenceButWork && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> IMPUTADO SIN JORNADA</span>}
-                                    {hasOverCoverage && !isNoPresenceButWork && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> IMPUTACION &gt; PRESENCIA</span>}
-                                </div>
-                            )}
-
-                            {/* Detailed List */}
-                            {expandedRows.has(emp.id) && (
-                                <div className="border-t border-slate-100 bg-slate-50/50 p-5 animate-fadeIn">
-                                    {showDebug && (
-                                        <div className="mb-4 p-4 bg-slate-900 rounded-lg overflow-x-auto">
-                                            <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Raw API Data Debug</h4>
-                                            <pre className="text-[10px] font-mono text-green-400 whitespace-pre">
-                                                {JSON.stringify(jobs.slice(0, 3), null, 2)}
-                                                {jobs.length > 3 && `\n... y ${jobs.length - 3} más`}
-                                                {jobs.length === 0 && "\n[No Data Returned from API]"}
-                                            </pre>
+                                    {/* Summary & Alerts */}
+                                    <div className="w-full lg:w-1/5 flex justify-end items-center gap-4 border-l border-slate-100 pl-6">
+                                        <div className="text-right bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
+                                            <div className="text-[10px] text-amber-600 font-bold uppercase tracking-widest mb-1">Improductivo</div>
+                                            <div className={`text-xl font-black ${improductiveTimeProduced > 0 ? 'text-amber-600' : 'text-slate-300'}`}>
+                                                {improductiveTimeProduced.toFixed(2)}h
+                                            </div>
                                         </div>
-                                    )}
+                                        <div className="text-right">
+                                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-1">Sin Cubrir</div>
+                                            <div className={`text-2xl font-black ${gapClass}`}>
+                                                {gapLabel}
+                                            </div>
+                                        </div>
+                                        <div className="w-8 flex justify-center">
+                                            {expandedRows.has(emp.id) ? (
+                                                <ChevronUp className="w-5 h-5 text-slate-400" />
+                                            ) : (
+                                                <ChevronDown className="w-5 h-5 text-slate-400" />
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
 
-                                    {jobs.length > 0 ? (
-                                                <table className="w-full text-sm text-left border-separate border-spacing-0">
-                                                    <thead className="text-slate-400 font-semibold text-xs uppercase tracking-wider">
-                                                <tr>
-                                                    <th className="px-4 py-2 border-b border-slate-200">Orden</th>
-                                                    <th className="px-4 py-2 border-b border-slate-200">Operación</th>
-                                                    <th className="px-4 py-2 border-b border-slate-200">Artículo</th>
-                                                    <th className="px-4 py-2 border-b border-slate-200 text-center">Cant.</th>
-                                                    <th className="px-4 py-2 border-b border-slate-200">Horario</th>
-                                                    <th className="px-4 py-2 border-b border-slate-200 text-right">Duración</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="text-slate-600">
-                                                {[...jobs]
-                                                    .sort((a, b) => {
-                                                        const aStart = parseErpDateTime(a.FechaInicio, a.HoraInicio).getTime();
-                                                        const bStart = parseErpDateTime(b.FechaInicio, b.HoraInicio).getTime();
-                                                        return aStart - bStart;
-                                                    })
-                                                    .map((job, idx) => {
-                                                    const start = parseErpDateTime(job.FechaInicio, job.HoraInicio);
-                                                    const end = parseErpDateTime(job.FechaFin, job.HoraFin);
-                                                    const duration = !isNaN(start.getTime()) && !isNaN(end.getTime())
-                                                        ? differenceInMinutes(end, start) / 60
-                                                        : 0;
-                                                    const improductiveInfo = getImproductiveArticle(job.IDArticulo);
+                                {/* Alerts Banner */}
+                                {(isMissingJobs || isBigGap || hasOverCoverage) && (
+                                    <div className="px-5 pb-3 flex flex-wrap gap-2 text-xs">
+                                        {isMissingJobs && <span className="bg-red-50 text-red-700 px-2 py-1 rounded border border-red-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> SIN IMPUTACIONES</span>}
+                                        {isBigGap && totalTimeCovered > 0 && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> HUECO DE {timeGap.toFixed(2)}h</span>}
+                                        {isNoPresenceButWork && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> IMPUTADO SIN JORNADA</span>}
+                                        {hasOverCoverage && !isNoPresenceButWork && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100 flex items-center gap-1 font-bold"><AlertTriangle className="w-3 h-3" /> IMPUTACION &gt; PRESENCIA</span>}
+                                    </div>
+                                )}
 
-                                                    return (
-                                                        <tr key={idx} className={`hover:bg-white transition-colors ${improductiveInfo ? 'bg-amber-50/60' : ''}`}>
-                                                            <td className="px-4 py-3 border-b border-slate-100 font-mono font-medium text-slate-900 bg-white/50">{job.NOrden}</td>
-                                                            <td className="px-4 py-3 border-b border-slate-100">{job.DescOperacion}</td>
-                                                            <td className="px-4 py-3 border-b border-slate-100 text-xs">
-                                                                <div className="flex items-center gap-2">
-                                                                    <span>{job.IDArticulo}</span>
-                                                                    {improductiveInfo && (
-                                                                        <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-wider">
-                                                                            Improductivo
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                                {improductiveInfo && (
-                                                                    <div className="text-[10px] text-amber-700 mt-1">
-                                                                        {improductiveInfo.desc}
-                                                                    </div>
-                                                                )}
-                                                            </td>
-                                                            <td className="px-4 py-3 border-b border-slate-100 text-center font-mono">
-                                                                <span className="text-blue-600 font-bold">{job.QBuena ?? 0}</span>
-                                                                <span className="text-slate-400 mx-1">/</span>
-                                                                <span className="text-slate-500">{job.QFabricar ?? 0}</span>
-                                                            </td>
-                                                            <td className="px-4 py-3 border-b border-slate-100 font-mono text-xs">
-                                                                {!isNaN(start.getTime()) ? format(start, 'HH:mm') : '??'} - {!isNaN(end.getTime()) ? format(end, 'HH:mm') : '??'}
-                                                            </td>
-                                                            <td className="px-4 py-3 border-b border-slate-100 text-right font-bold text-slate-800">
-                                                                {duration.toFixed(2)}h
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
+                                {/* Detailed List */}
+                                {expandedRows.has(emp.id) && (
+                                    <div className="border-t border-slate-100 bg-slate-50/50 p-5 animate-fadeIn">
+                                        {showDebug && (
+                                            <div className="mb-4 p-4 bg-slate-900 rounded-lg overflow-x-auto">
+                                                <h4 className="text-xs font-bold text-slate-400 mb-2 uppercase">Raw API Data Debug</h4>
+                                                <pre className="text-[10px] font-mono text-green-400 whitespace-pre">
+                                                    {JSON.stringify(jobs.slice(0, 3), null, 2)}
+                                                    {jobs.length > 3 && `\n... y ${jobs.length - 3} más`}
+                                                    {jobs.length === 0 && "\n[No Data Returned from API]"}
+                                                </pre>
+                                            </div>
+                                        )}
+
+                                        {jobs.length > 0 ? (
+                                            <table className="w-full text-sm text-left border-separate border-spacing-0">
+                                                <thead className="text-slate-400 font-semibold text-xs uppercase tracking-wider">
+                                                    <tr>
+                                                        <th className="px-4 py-2 border-b border-slate-200">Orden</th>
+                                                        <th className="px-4 py-2 border-b border-slate-200">Operación</th>
+                                                        <th className="px-4 py-2 border-b border-slate-200">Artículo</th>
+                                                        <th className="px-4 py-2 border-b border-slate-200 text-center">Cant.</th>
+                                                        <th className="px-4 py-2 border-b border-slate-200">Horario</th>
+                                                        <th className="px-4 py-2 border-b border-slate-200 text-right">Duración</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="text-slate-600">
+                                                    {[...jobs]
+                                                        .sort((a, b) => {
+                                                            const aStart = parseErpDateTime(a.FechaInicio, a.HoraInicio).getTime();
+                                                            const bStart = parseErpDateTime(b.FechaInicio, b.HoraInicio).getTime();
+                                                            return aStart - bStart;
+                                                        })
+                                                        .map((job, idx) => {
+                                                            const start = parseErpDateTime(job.FechaInicio, job.HoraInicio);
+                                                            const end = parseErpDateTime(job.FechaFin, job.HoraFin);
+                                                            const duration = !isNaN(start.getTime()) && !isNaN(end.getTime())
+                                                                ? differenceInMinutes(end, start) / 60
+                                                                : 0;
+                                                            const improductiveInfo = getImproductiveArticle(job.IDArticulo);
+
+                                                            return (
+                                                                <tr key={idx} className={`hover:bg-white transition-colors ${improductiveInfo ? 'bg-amber-50/60' : ''}`}>
+                                                                    <td className="px-4 py-3 border-b border-slate-100 font-mono font-medium text-slate-900 bg-white/50">{job.NOrden}</td>
+                                                                    <td className="px-4 py-3 border-b border-slate-100">{job.DescOperacion}</td>
+                                                                    <td className="px-4 py-3 border-b border-slate-100 text-xs">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span>{job.IDArticulo}</span>
+                                                                            {improductiveInfo && (
+                                                                                <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-wider">
+                                                                                    Improductivo
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                        {improductiveInfo && (
+                                                                            <div className="text-[10px] text-amber-700 mt-1">
+                                                                                {improductiveInfo.desc}
+                                                                            </div>
+                                                                        )}
+                                                                    </td>
+                                                                    <td className="px-4 py-3 border-b border-slate-100 text-center font-mono">
+                                                                        <span className="text-blue-600 font-bold">{job.QBuena ?? 0}</span>
+                                                                        <span className="text-slate-400 mx-1">/</span>
+                                                                        <span className="text-slate-500">{job.QFabricar ?? 0}</span>
+                                                                    </td>
+                                                                    <td className="px-4 py-3 border-b border-slate-100 font-mono text-xs">
+                                                                        {!isNaN(start.getTime()) ? format(start, 'HH:mm') : '??'} - {!isNaN(end.getTime()) ? format(end, 'HH:mm') : '??'}
+                                                                    </td>
+                                                                    <td className="px-4 py-3 border-b border-slate-100 text-right font-bold text-slate-800">
+                                                                        {duration.toFixed(2)}h
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                </tbody>
                                                 <tfoot className="bg-slate-100 text-xs uppercase">
                                                     <tr>
                                                         <td colSpan={5} className="px-4 py-2 text-right text-slate-500">Tiempo Imputado (Suma):</td>
@@ -1007,25 +1148,36 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                                                         <td className="px-4 py-2 text-right font-bold text-blue-600 border-t border-slate-200">{totalTimeCovered.toFixed(2)}h</td>
                                                     </tr>
                                                 </tfoot>
-                                        </table>
-                                    ) : (
-                                        <div className="text-center py-8 text-slate-400 flex flex-col items-center gap-2">
-                                            <Smartphone className="w-8 h-8 opacity-50" />
-                                            <p>No hay imputaciones de trabajo registradas para este periodo.</p>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    );
-                })}
+                                            </table>
+                                        ) : (
+                                            <div className="text-center py-8 text-slate-400 flex flex-col items-center gap-2">
+                                                <Smartphone className="w-8 h-8 opacity-50" />
+                                                <p>No hay imputaciones de trabajo registradas para este periodo.</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })
+                }
 
-                {comparisonRows.length === 0 && (
-                    <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
-                        <p className="text-slate-400 font-medium">No se encontraron empleados con actividad en este periodo.</p>
-                    </div>
-                )}
+                {
+                    comparisonRows.length === 0 && (
+                        <div className="text-center py-20 bg-white rounded-2xl border border-slate-200 border-dashed">
+                            <p className="text-slate-400 font-medium">No se encontraron empleados con actividad en este periodo.</p>
+                        </div>
+                    )
+                }
             </div>
+
+            {showDashboard && (
+                <ProductivityDashboard
+                    rows={filteredRows}
+                    globalStats={globalStats}
+                    onClose={() => setShowDashboard(false)}
+                />
+            )}
         </div>
     );
 };

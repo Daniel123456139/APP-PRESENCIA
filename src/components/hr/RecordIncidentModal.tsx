@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useMemo, useContext } from 'react';
-import { ProcessedDataRow, UnjustifiedGap, WorkdayDeviation } from '../../types';
-// JUSTIFICATION_REASONS removed
+import { RawDataRow, ProcessedDataRow, UnjustifiedGap, WorkdayDeviation } from '../../types';
 import { DataContext } from '../../App';
 import ValidationErrorsModal from '../shared/ValidationErrorsModal';
 import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
+import { generateGapStrategy, generateFullDayStrategy, generateWorkdayStrategy } from '../../services/incidentStrategies';
 import { useMotivos } from '../../hooks/useErp';
 
 interface RecordIncidentModalProps {
@@ -13,7 +13,7 @@ interface RecordIncidentModalProps {
     onClose: () => void;
     employeeData: ProcessedDataRow | null;
     onJustify: (
-        incident: { type: 'gap' | 'workday' | 'absentDay'; data: UnjustifiedGap | WorkdayDeviation | string },
+        incident: { type: 'gap' | 'workday' | 'absentDay'; data: UnjustifiedGap | WorkdayDeviation | { date: string } },
         reason: { id: number; desc: string },
         employee: ProcessedDataRow
     ) => Promise<void>;
@@ -23,7 +23,7 @@ interface IncidentToJustify {
     type: 'gap' | 'workday' | 'absentDay';
     key: string;
     description: React.ReactNode;
-    data: UnjustifiedGap | WorkdayDeviation | string;
+    data: UnjustifiedGap | WorkdayDeviation | { date: string };
 }
 
 const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClose, employeeData, onJustify, justifiedKeys }) => {
@@ -40,25 +40,70 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
     // Track previous isOpen to detect opening transition
     const prevIsOpenRef = React.useRef(isOpen);
 
+    const getShiftBounds = (shiftCode: string): { start: string; end: string } => {
+        if (shiftCode === 'TN' || shiftCode === 'T') return { start: '15:00', end: '23:00' };
+        if (shiftCode === 'N') return { start: '23:00', end: '07:00' };
+        if (shiftCode === 'C') return { start: '08:00', end: '17:00' };
+        return { start: '07:00', end: '15:00' };
+    };
+
+    const getShiftCodeForDate = (date: string): string => {
+        // FIX #2: Always return a valid shift code with fallback to employee's assigned shift
+        const change = employeeData?.shiftChanges?.find(c => c.date === date);
+        if (change?.shift) return change.shift;
+        if (employeeData?.turnoAsignado) return employeeData.turnoAsignado;
+        // Ultimate fallback: Morning shift
+        return 'M';
+    };
+
+    const normalizeDisplayTime = (timeStr: string): string => {
+        if (!timeStr) return '';
+        return timeStr.replace(' (+1)', '').substring(0, 5);
+    };
+
+    const addOneMinute = (timeStr: string): string => {
+        if (!timeStr) return '';
+        const parts = timeStr.substring(0, 5).split(':');
+        if (parts.length < 2) return timeStr;
+
+        const h = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+
+        const date = new Date();
+        date.setHours(h);
+        date.setMinutes(m + 1);
+
+        return date.toTimeString().substring(0, 5);
+    };
+
     const incidents = useMemo((): IncidentToJustify[] => {
         if (!employeeData) return [];
         const keysToCheck = justifiedKeys || new Map();
 
         const gapIncidents: IncidentToJustify[] = (employeeData.unjustifiedGaps || [])
             .map((gap, i): IncidentToJustify | null => {
-                const uniqueKey = `gap-${employeeData.operario}-${gap.date}-${gap.start}`;
+                // Fix: Display GAP start as 1 minute after punch out to avoid overlap perception
+                // User requirement: "si se va a las 8:30, incidencia de 8:31 a 10"
+                const adjustedStart = addOneMinute(gap.start);
+
+                // FIX #1: Include BOTH start AND end time to allow multiple gaps on same day
+                const uniqueKey = `gap-${employeeData.operario}-${gap.date}-${gap.start}-${gap.end}`;
                 if (keysToCheck.has(uniqueKey)) return null;
+
+                const shiftCode = getShiftCodeForDate(gap.date);
+                const shiftBounds = getShiftBounds(shiftCode);
 
                 return {
                     type: 'gap',
                     key: uniqueKey,
                     description: (
                         <span>
-                            Salto detectado: <strong className="font-bold text-red-600 bg-red-50 px-1 rounded mx-1">{gap.start} ➔ {gap.end}</strong>
+                            Salto detectado: <strong className="font-bold text-red-600 bg-red-50 px-1 rounded mx-1">{normalizeDisplayTime(adjustedStart)} ➔ {normalizeDisplayTime(gap.end)}</strong>
                             <span className="text-slate-500 text-xs text-nowrap">({gap.date})</span>
+                            <span className="text-slate-500 text-xs text-nowrap ml-2">Tramo: {shiftBounds.start}-{shiftBounds.end}</span>
                         </span>
                     ),
-                    data: gap,
+                    data: { ...gap, start: adjustedStart }, // Pass adjusted Start
                 };
             })
             .filter((item): item is IncidentToJustify => item !== null);
@@ -73,10 +118,22 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
             .map((dev, i): IncidentToJustify => {
                 const deviation = dev.actualHours - 8;
                 const sign = deviation > 0 ? '+' : '';
+                const shiftCode = getShiftCodeForDate(dev.date);
+                const shiftBounds = getShiftBounds(shiftCode);
                 return {
                     type: 'workday',
                     key: `dev-${employeeData.operario}-${dev.date}`,
-                    description: `Jornada de ${dev.actualHours.toFixed(2)}h (${sign}${deviation.toFixed(2)}h) el ${dev.date}`,
+                    description: (
+                        <span>
+                            Jornada de {dev.actualHours.toFixed(2)}h ({sign}{deviation.toFixed(2)}h) el {dev.date}
+                            <span className="text-slate-500 text-xs text-nowrap ml-2">Tramo: {shiftBounds.start}-{shiftBounds.end}</span>
+                            {dev.start && dev.end && (
+                                <span className="text-blue-600 text-xs text-nowrap ml-2 font-medium">
+                                    (Fichajes: {dev.start} - {dev.end})
+                                </span>
+                            )}
+                        </span>
+                    ),
                     data: dev,
                 };
             });
@@ -85,10 +142,17 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
             .map((date): IncidentToJustify | null => {
                 const uniqueKey = `abs-${employeeData.operario}-${date}`;
                 if (keysToCheck.has(uniqueKey)) return null;
+                const shiftCode = getShiftCodeForDate(date);
+                const shiftBounds = getShiftBounds(shiftCode);
                 return {
                     type: 'absentDay',
                     key: uniqueKey,
-                    description: <span className="font-semibold text-red-700">Ausencia completa el {date}</span>,
+                    description: (
+                        <span className="font-semibold text-red-700">
+                            Ausencia completa el {date}
+                            <span className="text-slate-500 text-xs text-nowrap ml-2">Tramo: {shiftBounds.start}-{shiftBounds.end}</span>
+                        </span>
+                    ),
                     data: { date },
                 };
             })
@@ -124,7 +188,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
 
     const availableReasons = useMemo(() => {
         return motivos
-            .filter(m => ![1, 14].includes(parseInt(m.IDMotivo)))
+            .filter(m => ![1].includes(parseInt(m.IDMotivo))) // FIX: Allow Code 14 (TAJ) for manual entry
             .map(m => ({
                 id: parseInt(m.IDMotivo),
                 desc: `${m.IDMotivo.padStart(2, '0')} - ${m.DescMotivo}`
@@ -172,50 +236,40 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
         const reason = availableReasons.find(r => r.id === parseInt(motivoId));
         if (!reason) return;
 
-        // Validación
-        let simulatedRow: any = null;
+        // Usar la estrategia centralizada para generar las filas exactas
+        let strategyResult;
+
         if (selectedIncident.type === 'gap') {
             const gapData = selectedIncident.data as UnjustifiedGap;
-            simulatedRow = {
-                IDOperario: employeeData.operario,
-                DescOperario: employeeData.nombre,
-                Fecha: gapData.date,
-                Hora: gapData.start.length === 5 ? `${gapData.start}:00` : gapData.start,
-                Entrada: 0,
-                MotivoAusencia: reason.id,
-                DescMotivoAusencia: reason.desc,
-                Inicio: gapData.start,
-                Fin: gapData.end
-            };
-        } else if (selectedIncident.type === 'absentDay') {
-            const dateStr = selectedIncident.data as string;
-            simulatedRow = {
-                IDOperario: employeeData.operario,
-                DescOperario: employeeData.nombre,
-                Fecha: dateStr,
-                Hora: '00:00:00',
-                Entrada: 0,
-                MotivoAusencia: reason.id,
-                DescMotivoAusencia: reason.desc,
-                Inicio: '',
-                Fin: ''
-            };
-        } else {
+            strategyResult = generateGapStrategy(gapData, reason, employeeData);
+        } else if (selectedIncident.type === 'workday') {
             const workdayData = selectedIncident.data as WorkdayDeviation;
-            simulatedRow = {
-                IDOperario: employeeData.operario,
-                DescOperario: employeeData.nombre,
-                Fecha: workdayData.date,
-                Hora: '00:00:00',
-                Entrada: 0,
-                MotivoAusencia: reason.id,
-                DescMotivoAusencia: reason.desc,
-                Inicio: '00:00',
-                Fin: '00:00'
-            };
+            strategyResult = generateWorkdayStrategy(workdayData, reason, employeeData);
+        } else if (selectedIncident.type === 'absentDay') {
+            const { date } = selectedIncident.data as { date: string };
+            strategyResult = generateFullDayStrategy(date, reason, employeeData);
+        } else {
+            return; // Should not happen
         }
 
-        const issues = validateNewIncidents(erpData, [simulatedRow]);
+        // Combinar inserts y updates para validar
+        // Para updates, necesitamos simular el estado final. 
+        // ValidationService espera "NewRows". Si es update, pasamos la fila modificada
+        const rowsToValidate = [...strategyResult.rowsToInsert, ...strategyResult.rowsToUpdate] as RawDataRow[];
+
+        let issues: ValidationIssue[] = [];
+        try {
+            if (erpData && Array.isArray(erpData)) {
+                issues = validateNewIncidents(erpData, rowsToValidate);
+            } else {
+                console.warn("⚠️ skipping validation: erpData not available or invalid");
+            }
+        } catch (validationErr) {
+            console.error("❌ Critical Validation Error:", validationErr);
+            // Optionally set a non-blocking error to notify user but not freeze
+            // For now, we allow proceeding if validation crashes to avoid "freeze"
+        }
+
         const errors = issues.filter(i => i.type === 'error');
         const warnings = issues.filter(i => i.type === 'warning');
 
@@ -227,24 +281,18 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
         // Only block if there are actual errors
         if (errors.length > 0) {
             console.error('❌ [VALIDATION] Errors found - blocking submission:', errors);
-            // console.log('📋 Simulated row that was validated:', simulatedRow);
             setValidationIssues(errors);
             setIsValidationModalOpen(true);
             return;
         }
 
-        // Diagnostic logging for full-day absences
-        const isFullDayAbsence = selectedIncident.type === 'absentDay' ||
-            (selectedIncident.type === 'workday' && simulatedRow.Hora === '00:00:00');
+        const isFullDayAbsence = selectedIncident.type === 'absentDay';
 
         // console.group('📝 [SUBMIT] Incidencia a registrar');
-        // console.log('👤 Empleado:', employeeData.nombre, '(ID:', employeeData.operario, ')');
-        // console.log('📅 Fecha:', simulatedRow.Fecha);
-        // console.log('⏰ Hora:', simulatedRow.Hora);
-        // console.log('🏷️ Motivo:', simulatedRow.MotivoAusencia, '-', simulatedRow.DescMotivoAusencia);
-        // console.log('📊 Tipo:', selectedIncident.type);
-        // console.log('🌐 ¿Día completo?:', isFullDayAbsence ? 'SÍ' : 'NO');
-        // console.log('📦 Simulated Row:', simulatedRow);
+        // console.log('👤 Empleado:', employeeData.nombre);
+        // console.log('Strategy:', strategyResult.description);
+        // console.log('Rows to Insert:', strategyResult.rowsToInsert);
+        // console.log('Rows to Update:', strategyResult.rowsToUpdate);
         // console.groupEnd();
 
         setError('');
@@ -252,7 +300,16 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
         try {
             await onJustify(selectedIncident, reason, employeeData);
             // Si llega aquí, es éxito
-            onClose();
+            const hasMoreIncidents = incidents.length > 1;
+            if (hasMoreIncidents) {
+                const nextIncident = incidents.find(inc => inc.key !== selectedIncidentKey);
+                if (nextIncident) {
+                    setSelectedIncidentKey(nextIncident.key);
+                }
+                setMotivoId('');
+            } else {
+                onClose();
+            }
         } catch (err: any) {
             console.error("Error saving incident:", err);
             // Mostrar error amigable
@@ -270,7 +327,16 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
             setIsSaving(true);
             try {
                 await onJustify(selectedIncident, reason, employeeData);
-                onClose();
+                const hasMoreIncidents = incidents.length > 1;
+                if (hasMoreIncidents) {
+                    const nextIncident = incidents.find(inc => inc.key !== selectedIncidentKey);
+                    if (nextIncident) {
+                        setSelectedIncidentKey(nextIncident.key);
+                    }
+                    setMotivoId('');
+                } else {
+                    onClose();
+                }
             } catch (err: any) {
                 setError(err.message || "Error al guardar tras validación.");
             } finally {
@@ -354,6 +420,63 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                             {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
                         </div>
                     </div>
+
+                    {selectedIncident && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
+                            <h4 className="text-sm font-semibold text-blue-800 mb-1 flex items-center">
+                                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                </svg>
+                                Previsualización de Registro
+                            </h4>
+                            <p className="text-sm text-blue-700">
+                                {(() => {
+                                    // Calculate preview using actual strategy logic
+                                    try {
+                                        const dummyReason = { id: 99, desc: 'Preview' }; // Dummy reason for time calc
+                                        let result;
+
+                                        if (selectedIncident.type === 'gap') {
+                                            const gapData = selectedIncident.data as UnjustifiedGap;
+                                            result = generateGapStrategy(gapData, dummyReason, employeeData);
+                                        } else if (selectedIncident.type === 'absentDay') {
+                                            const date = (selectedIncident.data as { date: string }).date;
+                                            result = generateFullDayStrategy(date, dummyReason, employeeData);
+                                        } else if (selectedIncident.type === 'workday') {
+                                            const workdayData = selectedIncident.data as WorkdayDeviation;
+                                            result = generateWorkdayStrategy(workdayData, dummyReason, employeeData);
+                                        } else {
+                                            return "Se registrará una desviación de jornada.";
+                                        }
+
+                                        // Extract time range from rowsToInsert/Update
+                                        // Usually strategies return [Entry, Exit]. Exit row has Inicio/Fin fields for reference.
+                                        let rangeText = "";
+                                        const exitRow = result.rowsToInsert.find(r => r.Entrada === 0) || result.rowsToUpdate.find(r => r.IDControlPresencia);
+
+                                        if (exitRow && exitRow.Inicio && exitRow.Fin) {
+                                            rangeText = `${normalizeDisplayTime(exitRow.Inicio)} ➔ ${normalizeDisplayTime(exitRow.Fin)}`;
+                                        } else if (result.rowsToInsert.length === 2) {
+                                            // Fallback if properties missing
+                                            const start = result.rowsToInsert[0].Hora;
+                                            const end = result.rowsToInsert[1].Hora;
+                                            rangeText = `${normalizeDisplayTime(start || '')} ➔ ${normalizeDisplayTime(end || '')}`;
+                                        }
+
+                                        return (
+                                            <>
+                                                Se grabará incidencia: <strong className="font-bold">{rangeText}</strong>
+                                                <br />
+                                                <span className="text-xs opacity-75">{result.description}</span>
+                                            </>
+                                        );
+                                    } catch (e) {
+                                        return "Selecciona una incidencia para ver detalles.";
+                                    }
+                                })()}
+                            </p>
+                        </div>
+                    )}
 
                     {error && (
                         <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">

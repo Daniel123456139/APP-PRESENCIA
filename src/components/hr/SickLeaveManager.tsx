@@ -1,6 +1,8 @@
 
 import React, { useState, useMemo, useContext, useEffect } from 'react';
-import { LeaveRange, RawDataRow, User, Role } from '../../types';
+import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { getFirebaseDb } from '../../firebaseConfig';
+import { LeaveRange, RawDataRow, Role, SickLeave } from '../../types';
 import SickLeaveModal from './SickLeaveModal';
 import EditLeaveModal from './EditLeaveModal';
 import ActiveSickLeavesTable from './ActiveSickLeavesTable';
@@ -12,12 +14,36 @@ import { AuthContext } from '../../App';
 import { useErpDataState, useErpDataActions } from '../../store/erpDataStore';
 import { SickLeaveMetadataService } from '../../services/sickLeaveMetadataService';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
-import { getCalendarioOperario } from '../../services/erpApi';
+import { getCalendarioOperario, Operario } from '../../services/erpApi';
 
 interface SickLeaveManagerProps {
     activeSickLeaves: RawDataRow[];
     onRefresh: () => void;
 }
+
+interface ClosedSickLeaveRecord {
+    id: string;
+    employeeId: string | number;
+    employeeName: string;
+    type: 'ITEC' | 'ITAT';
+    startDate: string;
+    endDate: string;
+    dischargeDate: string;
+    motivo?: string;
+}
+
+interface SickLeaveEmployeeOption {
+    id: number;
+    name: string;
+    role: Role;
+}
+
+type SickLeaveFormData = Omit<SickLeave, 'id' | 'operarioName'> & {
+    id?: number;
+    startTime?: string;
+    endTime?: string;
+    fechaRevision?: string;
+};
 
 const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, onRefresh }) => {
     const { showNotification } = useNotification();
@@ -37,6 +63,9 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
     const [rangeToEdit, setRangeToEdit] = useState<LeaveRange | null>(null);
     const [createModalInitialValues, setCreateModalInitialValues] = useState<any>(undefined);
 
+    // Historico Firestore (BAJAS)
+    const [historicalBajas, setHistoricalBajas] = useState<ClosedSickLeaveRecord[]>([]);
+
     // Validation
     const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
     const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
@@ -55,7 +84,10 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
         const filtered = allLeaves.filter(l => {
             if (!isSickLeave(l.motivoId)) return false;
             const meta = SickLeaveMetadataService.get(l.employeeId, l.startDate);
-            return !meta?.dischargeDate; // Active if NO discharge date
+            // FIX: Allow scheduling discharge. Active if NO discharge date OR discharge date is in FUTURE
+            if (!meta?.dischargeDate) return true;
+            const todayStr = toISODateLocal(new Date());
+            return meta.dischargeDate > todayStr;
         });
 
         // DEDUPLICATION: One row per employee (the most recent one)
@@ -71,7 +103,7 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
             .sort((a, b) => parseISOToLocalDate(a.startDate).getTime() - parseISOToLocalDate(b.startDate).getTime());
     }, [activeSickLeaves]);
 
-    // 2. HISTORICAL LEAVES: Leaves WITH discharge date
+    // 2. HISTORICAL LEAVES: Leaves WITH discharge date (fallback local)
     const historicalLeaves = useMemo(() => {
         const allLeaves = groupRawDataToLeaves(activeSickLeaves);
 
@@ -82,18 +114,138 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
         }).sort((a, b) => parseISOToLocalDate(b.startDate).getTime() - parseISOToLocalDate(a.startDate).getTime());
     }, [activeSickLeaves]);
 
+
+    useEffect(() => {
+        let unsubscribe = () => { };
+        try {
+            const db = getFirebaseDb();
+            // FIX #4: Verify collection access and add debugging
+            console.log("Inicializando listener de BAJAS históricos...");
+
+            const q = query(collection(db, 'BAJAS'), orderBy('dischargeDate', 'desc'));
+
+            unsubscribe = onSnapshot(q, (snapshot) => {
+                console.log(`Recibidos ${snapshot.size} registros históricos de bajas.`);
+                const rows: ClosedSickLeaveRecord[] = [];
+                snapshot.forEach(docSnap => {
+                    const data = docSnap.data() as any;
+                    rows.push({
+                        id: docSnap.id,
+                        employeeId: data.employeeId,
+                        employeeName: data.employeeName || '',
+                        type: data.type,
+                        startDate: data.startDate,
+                        endDate: data.endDate || data.dischargeDate,
+                        dischargeDate: data.dischargeDate,
+                        motivo: data.motivo
+                    });
+                });
+                setHistoricalBajas(rows);
+            }, (err) => {
+                console.error('Firestore Error (BAJAS):', err);
+                if (err.code === 'permission-denied') {
+                    showNotification('Error de permisos al leer histórico de bajas. Contacte al administrador.', 'error');
+                } else {
+                    showNotification('Error de conexión al leer histórico de bajas.', 'error');
+                }
+            });
+        } catch (err) {
+            console.error('Error inicializando Firestore BAJAS:', err);
+        }
+
+        return () => unsubscribe();
+        return () => unsubscribe();
+    }, []);
+
+    // NEW: Auto-Archive Effect
+    // Checks for leaves that have a discharge date <= today but are NOT yet in the historical Firestore collection (BAJAS)
+    useEffect(() => {
+        const checkAndArchive = async () => {
+            const todayStr = toISODateLocal(new Date());
+            const allLeaves = groupRawDataToLeaves(activeSickLeaves);
+
+            // Find candidates: Sick leaves with dischargeDate <= today
+            const candidates = allLeaves.filter(l => {
+                if (!isSickLeave(l.motivoId)) return false;
+                const meta = SickLeaveMetadataService.get(l.employeeId, l.startDate);
+                return meta?.dischargeDate && meta.dischargeDate <= todayStr;
+            });
+
+            // For each candidate, check if it exists in 'historicalBajas' and if not, add it
+            for (const leave of candidates) {
+                const meta = SickLeaveMetadataService.get(leave.employeeId, leave.startDate);
+                const dischargeDate = meta?.dischargeDate!;
+
+                // Avoid duplicates: Check if we already have this record in history
+                // We assume ID is generated or unique enough, or check by employee+startDate
+                const alreadyArchived = historicalBajas.some(h =>
+                    String(h.employeeId) === String(leave.employeeId) &&
+                    h.startDate === leave.startDate
+                );
+
+                if (!alreadyArchived) {
+                    console.log(`Auto-archiving expired sick leave for ${leave.employeeName} (Discharge: ${dischargeDate})`);
+                    try {
+                        // Import dynamically to avoid circular dependencies if any, or just use imported service
+                        const { upsertClosedSickLeave } = await import('../../services/firestoreService');
+                        await upsertClosedSickLeave({
+                            employeeId: String(leave.employeeId),
+                            employeeName: leave.employeeName,
+                            type: leave.motivoId === 10 ? 'ITAT' : 'ITEC',
+                            startDate: leave.startDate,
+                            endDate: leave.endDate, // Logic might differ if we want to truncate
+                            dischargeDate: dischargeDate,
+                            motivo: leave.motivoDesc,
+                            closedBy: 'SYSTEM_AUTO'
+                        });
+                        showNotification(`Baja de ${leave.employeeName} movida al histórico`, 'info');
+                    } catch (err) {
+                        console.error('Error auto-archiving leave:', err);
+                    }
+                }
+            }
+        };
+
+        if (activeSickLeaves.length > 0 && historicalBajas.length > 0) {
+            // We need historicalBajas loaded to check for duplicates efficiently, 
+            // or we can rely on upsert idempotency (firestoreService usually handles ID generation, need to check).
+            // If upsertClosedSickLeave uses a deterministic ID (e.g. empId_startDate), it's safe to call.
+            checkAndArchive();
+        }
+        // Run this check periodically or when data changes
+    }, [activeSickLeaves, historicalBajas]); // Dependency on historicalBajas ensures we don't try before loading history
+
+
+    const historicalBajasAsLeaves = useMemo(() => {
+        if (historicalBajas.length === 0) return [] as (LeaveRange & { dischargeDate?: string })[];
+        return historicalBajas.map(b => ({
+            id: b.id,
+            employeeId: Number(b.employeeId),
+            employeeName: b.employeeName || `Operario ${b.employeeId}`,
+            department: '',
+            motivoId: b.type === 'ITAT' ? 10 : 11,
+            motivoDesc: b.motivo || b.type,
+            startDate: b.startDate,
+            endDate: b.endDate || b.dischargeDate,
+            isFullDay: true,
+            originalRows: [],
+            dischargeDate: b.dischargeDate
+        }));
+    }, [historicalBajas]);
+
     const visibleLeaves = useMemo(() => {
-        const source = activeView === 'active' ? activeLeaves : historicalLeaves;
+        const historySource = historicalBajasAsLeaves.length > 0 ? historicalBajasAsLeaves : historicalLeaves;
+        const source = activeView === 'active' ? activeLeaves : historySource;
         if (!searchTerm) return source;
         const lower = searchTerm.toLowerCase();
         return source.filter(l => {
             const paddedId = l.employeeId.toString().padStart(3, '0');
             return l.employeeName.toLowerCase().includes(lower) || paddedId.includes(lower);
         });
-    }, [activeView, activeLeaves, historicalLeaves, searchTerm]);
+    }, [activeView, activeLeaves, historicalLeaves, historicalBajasAsLeaves, searchTerm]);
 
     const employeeOptions = useMemo(() => {
-        const uniqueMap = new Map<number, User>();
+        const uniqueMap = new Map<number, SickLeaveEmployeeOption>();
         erpData.forEach(row => {
             if (!uniqueMap.has(row.IDOperario)) {
                 uniqueMap.set(row.IDOperario, {
@@ -107,7 +259,7 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
     }, [erpData]);
 
     // Actions
-    const handleSaveNewSickLeave = async (leaveData: Omit<SickLeave, 'id' | 'operarioName'> & { id?: number }, operario?: Operario) => {
+    const handleSaveNewSickLeave = async (leaveData: SickLeaveFormData, operario?: Operario) => {
         // If we have specific operario object passed, use it. Otherwise try to find in options (fallback, mainly for validation if old code used)
 
         let employee = null;
@@ -394,7 +546,10 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
                                     const nextRevision = meta?.nextRevisionDate;
                                     const today = new Date();
                                     const start = parseISOToLocalDate(leave.startDate);
-                                    const durationDays = Math.floor((today.getTime() - start.getTime()) / (1000 * 3600 * 24));
+                                    const dischargeDate = (leave as any).dischargeDate || meta?.dischargeDate || leave.endDate;
+                                    const endDateObj = dischargeDate ? parseISOToLocalDate(dischargeDate) : today;
+                                    const durationDays = Math.max(0, Math.floor((endDateObj.getTime() - start.getTime()) / (1000 * 3600 * 24)) + 1);
+                                    const canManage = Array.isArray(leave.originalRows) && leave.originalRows.length > 0;
 
                                     let revisionStatusColor = "text-slate-500";
                                     if (nextRevision) {
@@ -420,19 +575,22 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
                                                 {parseISOToLocalDate(leave.startDate).toLocaleDateString()}
                                             </td>
                                             <td className="px-6 py-4 font-mono text-orange-700 font-bold">
-                                                {/* DATA DE ALTA */}
-                                                {meta?.dischargeDate ? parseISOToLocalDate(meta.dischargeDate).toLocaleDateString() : '-'}
+                                                {dischargeDate ? parseISOToLocalDate(dischargeDate).toLocaleDateString() : '-'}
                                             </td>
                                             <td className="px-6 py-4">
                                                 <span className="text-slate-600 font-medium">{durationDays} días</span>
                                             </td>
                                             <td className="px-6 py-4 text-right">
-                                                <button
-                                                    onClick={() => { setRangeToEdit(leave); setIsEditModalOpen(true); }}
-                                                    className="text-indigo-600 hover:text-indigo-900 font-medium text-xs bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded transition-colors"
-                                                >
-                                                    Gestionar
-                                                </button>
+                                                {canManage ? (
+                                                    <button
+                                                        onClick={() => { setRangeToEdit(leave); setIsEditModalOpen(true); }}
+                                                        className="text-indigo-600 hover:text-indigo-900 font-medium text-xs bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded transition-colors"
+                                                    >
+                                                        Gestionar
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-xs text-slate-400">Solo lectura</span>
+                                                )}
                                             </td>
                                         </tr>
                                     );

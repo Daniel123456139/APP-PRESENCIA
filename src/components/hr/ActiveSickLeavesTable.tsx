@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { RawDataRow } from '../../types';
 import { parseISOToLocalDate, toISODateLocal } from '../../utils/localDate';
 import { SickLeaveMetadataService } from '../../services/sickLeaveMetadataService';
+import { upsertClosedSickLeave } from '../../services/firestoreService';
 import { useNotification } from '../shared/NotificationContext';
 import { groupRawDataToLeaves } from '../../services/leaveService';
 
@@ -11,7 +12,16 @@ interface ActiveSickLeavesTableProps {
     onRefresh: () => void;
 }
 
+
+const formatShortDate = (d: string) => {
+    try {
+        const [y, m, day] = d.split('-');
+        return `${day}/${m}/${y}`;
+    } catch { return d; }
+};
+
 const ActiveSickLeavesTable: React.FC<ActiveSickLeavesTableProps> = ({ data, onExtend, onRefresh }) => {
+
     const { showNotification } = useNotification();
     const isSickLeave = (motivoId: number) => motivoId === 10 || motivoId === 11;
 
@@ -36,14 +46,47 @@ const ActiveSickLeavesTable: React.FC<ActiveSickLeavesTableProps> = ({ data, onE
             .sort((a, b) => parseISOToLocalDate(a.startDate).getTime() - parseISOToLocalDate(b.startDate).getTime());
     }, [data]);
 
-    const handleUpdateDischargeDate = (employeeId: number, startDate: string, date: string) => {
+    const handleUpdateDischargeDate = async (employeeId: number, startDate: string, date: string) => {
         if (!date) return;
-        // Confirm before moving to history? Maybe too intrusive. 
-        // Logic: active -> sets date -> re-render -> filter removes it -> appears in history
-        if (window.confirm("¿Establecer fecha de alta? La baja pasará al histórico.")) {
+
+        // Check date logic
+        const todayStr = toISODateLocal(new Date());
+        const isFuture = date > todayStr;
+
+        if (window.confirm(isFuture
+            ? `¿Programar fecha de alta para el ${formatShortDate(date)}? La baja permanecerá activa hasta ese día.`
+            : "¿Establecer fecha de alta? La baja pasará al histórico inmediatamente.")) {
+
+            // 1. Always update metadata (so manager knows about the date)
             SickLeaveMetadataService.update(employeeId, startDate, { dischargeDate: date });
+
+            // 2. Only move to history DB if date is reached
+            if (!isFuture) {
+                const leave = activeLeaves.find(l => l.employeeId === employeeId && l.startDate === startDate);
+                if (leave) {
+                    try {
+                        console.log("Moviendo baja a histórico (BAJAS):", leave);
+                        await upsertClosedSickLeave({
+                            employeeId: String(leave.employeeId),
+                            employeeName: leave.employeeName,
+                            type: leave.motivoId === 10 ? 'ITAT' : 'ITEC',
+                            startDate: leave.startDate,
+                            endDate: leave.endDate,
+                            dischargeDate: date,
+                            motivo: leave.motivoDesc,
+                            closedBy: 'RRHH'
+                        });
+                        console.log("Baja guardada en histórico correctamente.");
+                    } catch (error: any) {
+                        console.error('Error registrando baja finalizada en BAJAS:', error);
+                        showNotification(`Error crítico: No se pudo guardar en histórico. Detalles: ${error.message}`, 'error');
+                    }
+                }
+            } else {
+                showNotification(`Alta programada para el ${date}. Se moverá automáticmente ese día.`, 'success');
+            }
+
             onRefresh();
-            showNotification("Fecha de alta establecida. Baja movida al histórico.", 'success');
         }
     };
 

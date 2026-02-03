@@ -41,7 +41,7 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
     const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
     const [fechaInicio, setFechaInicio] = useState<string>(firstDayOfMonth);
     const [fechaFin, setFechaFin] = useState<string>(lastDayOfMonth);
-    
+
     const filteredRawData = useMemo(() => {
         let data = erpData;
         if (selectedDepartment !== 'all') {
@@ -90,11 +90,11 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
             deptData.excesoJornada1 += curr.excesoJornada1;
             deptData.numRetrasos += curr.numRetrasos;
             deptData.employeeCount.add(curr.operario);
-            
+
             return acc;
         }, initial);
     }, [processedData]);
-    
+
     const totalAbsenceDays = aggregatedData.hVacaciones + (aggregatedData.hMedico + aggregatedData.hLDisp + aggregatedData.hLeyFam + aggregatedData.asOficiales) / 8;
 
     const absenceDistributionData = [
@@ -113,14 +113,14 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(row.Fecha) || !/^\d{2}:\d{2}:\d{2}$/.test(row.Hora)) return acc;
             const key = `${row.IDOperario}-${row.Fecha}`;
             if (!acc[key]) acc[key] = { ins: [], outs: [] };
-            
+
             const dateTime = parseLocalDateTime(row.Fecha, row.Hora).getTime();
-            
+
             if (row.Entrada === 1) acc[key].ins.push(dateTime);
             else if (row.MotivoAusencia === 1) acc[key].outs.push(dateTime);
             return acc;
         }, {});
-        
+
         Object.values(dailyRecords).forEach((records: { ins: number[], outs: number[] }) => {
             if (records.ins.length > 0 && records.outs.length > 0) {
                 const firstIn = Math.min(...records.ins);
@@ -134,7 +134,7 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
         });
 
         if (hoursByDay.size === 0) return [];
-        const sorted = Array.from(hoursByDay.entries()).sort((a,b) => a[0].localeCompare(b[0]));
+        const sorted = Array.from(hoursByDay.entries()).sort((a, b) => a[0].localeCompare(b[0]));
         return sorted.map(([date, hours]) => ({
             label: parseISOToLocalDate(date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }),
             value: hours
@@ -144,12 +144,12 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
     const departmentOvertimeData = Array.from(aggregatedData.byDept.entries()).map(([dept, data]) => ({
         label: dept,
         value: data.employeeCount.size > 0 ? data.excesoJornada1 / data.employeeCount.size : 0,
-    })).sort((a,b) => b.value - a.value);
+    })).sort((a, b) => b.value - a.value);
 
     const departmentDelayData = Array.from(aggregatedData.byDept.entries()).map(([dept, data]) => ({
         label: dept,
         value: data.numRetrasos,
-    })).sort((a,b) => b.value - a.value);
+    })).sort((a, b) => b.value - a.value);
 
     const hasData = processedData && processedData.length > 0;
     const hasAbsenceData = absenceDistributionData.some(d => d.value > 0);
@@ -159,7 +159,7 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
     return (
         <div className="space-y-6">
             <h1 className="text-3xl font-bold text-slate-800">Análisis Visual Global</h1>
-            
+
             <div className="p-4 bg-white rounded-xl shadow-sm border border-slate-200">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-end">
                     <div className="lg:col-span-1">
@@ -171,55 +171,55 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
                     </div>
                     <div>
                         <label htmlFor="vis-fechaInicio" className="block text-sm font-medium text-slate-700">Fecha Inicio</label>
-                        <input type="date" id="vis-fechaInicio" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm"/>
+                        <input type="date" id="vis-fechaInicio" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm" />
                     </div>
                     <div>
                         <label htmlFor="vis-fechaFin" className="block text-sm font-medium text-slate-700">Fecha Fin</label>
-                        <input type="date" id="vis-fechaFin" value={fechaFin} onChange={e => setFechaFin(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm"/>
+                        <input type="date" id="vis-fechaFin" value={fechaFin} onChange={e => setFechaFin(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm" />
                     </div>
                 </div>
-                 <div className="mt-4 flex justify-end">
-                     <button onClick={handleClearFilters} className="px-4 py-2 bg-slate-600 text-white font-semibold rounded-md hover:bg-slate-700">
+                <div className="mt-4 flex justify-end">
+                    <button onClick={handleClearFilters} className="px-4 py-2 bg-slate-600 text-white font-semibold rounded-md hover:bg-slate-700">
                         Limpiar Filtros
                     </button>
                 </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <KpiCard title="Total Horas" value={hasData ? aggregatedData.totalHoras.toFixed(0) : '0'} description="Suma de horas computables" icon={<SvgIcon type="dashboard" className="h-6 w-6" />} color="blue"/>
-                <KpiCard title="Total H. Extra" value={hasData ? aggregatedData.excesoJornada1.toFixed(0) : '0'} description="Horas sobre jornada estándar" icon={<SvgIcon type="shifts" className="h-6 w-6"/>} color="purple"/>
-                <KpiCard title="Días Ausencia" value={hasData ? totalAbsenceDays.toFixed(1) : '0'} description="Ausencias justificadas (aprox)" icon={<SvgIcon type="sickleave" className="h-6 w-6"/>} color="emerald"/>
-                <KpiCard title="Nº Retrasos" value={hasData ? aggregatedData.numRetrasos.toString() : '0'} description="Fichajes fuera de hora" icon={<SvgIcon type="late" className="h-6 w-6"/>} color="amber"/>
+                <KpiCard title="Total Horas" value={hasData ? aggregatedData.totalHoras.toFixed(0) : '0'} description="Suma de horas computables" icon={<SvgIcon type="dashboard" className="h-6 w-6" />} color="blue" />
+                <KpiCard title="Total H. Extra" value={hasData ? aggregatedData.excesoJornada1.toFixed(0) : '0'} description="Horas sobre jornada estándar" icon={<SvgIcon type="shifts" className="h-6 w-6" />} color="purple" />
+                <KpiCard title="Días Ausencia" value={hasData ? totalAbsenceDays.toFixed(1) : '0'} description="Ausencias justificadas (aprox)" icon={<SvgIcon type="sickleave" className="h-6 w-6" />} color="emerald" />
+                <KpiCard title="Nº Retrasos" value={hasData ? aggregatedData.numRetrasos.toString() : '0'} description="Fichajes fuera de hora" icon={<SvgIcon type="late" className="h-6 w-6" />} color="amber" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                 <div className="lg:col-span-2">
+                <div className="lg:col-span-2">
                     {dailyHoursData && dailyHoursData.length > 0 ? (
                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-full">
-                            <BarChart 
+                            <BarChart
                                 data={dailyHoursData}
                                 title="Evolución de Horas Totales por Día"
                             />
                         </div>
                     ) : <ChartEmptyState title="Evolución de Horas Totales por Día" />}
-                 </div>
-                 <div>
+                </div>
+                <div>
                     {hasAbsenceData ? (
                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 h-full">
-                            <DoughnutChart 
+                            <DoughnutChart
                                 data={absenceDistributionData}
                                 title="Distribución de Ausencias (en Horas)"
                                 colors={CHART_COLORS}
                             />
                         </div>
                     ) : <ChartEmptyState title="Distribución de Ausencias (en Horas)" />}
-                 </div>
+                </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {hasOvertimeData ? (
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                        <BarChart 
+                        <BarChart
                             data={departmentOvertimeData}
                             title="Promedio de Horas Extra por Sección"
                             color="#10B981"
@@ -228,8 +228,8 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
                     </div>
                 ) : <ChartEmptyState title="Promedio de Horas Extra por Sección" />}
                 {hasDelayData ? (
-                     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                        <BarChart 
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                        <BarChart
                             data={departmentDelayData}
                             title="Total de Retrasos por Sección"
                             color="#F59E0B"

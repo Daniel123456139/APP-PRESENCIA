@@ -305,6 +305,8 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                 employeeOptions={employeeOptions as any}
                 onRefreshNeeded={reloadFromServer}
                 setIncidentLog={props.setIncidentLog}
+                startDate={startDate}
+                endDate={endDate}
             />
         </div>
     );

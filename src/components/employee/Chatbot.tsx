@@ -18,7 +18,7 @@ const getApiKey = () => {
         if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
             return process.env.API_KEY;
         }
-    } catch (e) {}
+    } catch (e) { }
     return '';
 };
 
@@ -35,7 +35,7 @@ const Chatbot: React.FC = () => {
     const auth = useContext(AuthContext) as AuthContextType;
     const { erpData, shifts } = useContext(DataContext);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    
+
     const initialMessage = "Soy ProBot, tu asistente personal. Puedes preguntarme sobre tus horas, vacaciones, permisos, etc. ¿En qué puedo ayudarte?";
 
     useEffect(() => {
@@ -48,7 +48,7 @@ const Chatbot: React.FC = () => {
             setMessages([{ text: initialMessage, sender: 'bot' }]);
         }
     }, [auth?.user, erpData, shifts, messages.length]);
-    
+
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, isLoading]);
@@ -56,7 +56,7 @@ const Chatbot: React.FC = () => {
     const handleSend = async (messageText: string) => {
         const text = messageText.trim();
         if (text === '' || isLoading) return;
-        
+
         if (!ai) {
             setMessages(prev => [...prev, { text: text, sender: 'user' }, { text: "⚠️ Error: API Key no configurada. No puedo responder.", sender: 'bot' }]);
             return;
@@ -81,10 +81,10 @@ const Chatbot: React.FC = () => {
         `;
 
         try {
-            const stream = await ai.models.generateContentStream({ 
-                model: 'gemini-2.5-flash', 
-                contents: text, 
-                config: { systemInstruction } 
+            const stream = await ai.models.generateContentStream({
+                model: 'gemini-2.5-flash',
+                contents: text,
+                config: { systemInstruction }
             });
 
             let botResponse = '';
@@ -101,7 +101,7 @@ const Chatbot: React.FC = () => {
 
         } catch (error) {
             console.error("Error getting chatbot response:", error);
-            const errorMessage: Message = { text: "Lo siento, ha ocurrido un error al procesar tu solicitud.", sender: 'bot'};
+            const errorMessage: Message = { text: "Lo siento, ha ocurrido un error al procesar tu solicitud.", sender: 'bot' };
             setMessages(prev => {
                 const newMessages = [...prev];
                 // Replace the empty bot message with the error message
@@ -136,7 +136,7 @@ const Chatbot: React.FC = () => {
                 aria-label="Toggle Chatbot"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
             </button>
             {isOpen && (
@@ -151,14 +151,14 @@ const Chatbot: React.FC = () => {
                     </div>
                     <div className="flex-1 p-4 overflow-y-auto bg-slate-50 space-y-4">
                         {messages.map((msg, index) => (
-                             <div key={index} className={`flex items-end gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div key={index} className={`flex items-end gap-2 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
                                 {msg.sender === 'bot' && <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">P</div>}
                                 <div className={`px-4 py-2 rounded-2xl max-w-xs break-words ${msg.sender === 'user' ? 'bg-blue-500 text-white rounded-br-none' : 'bg-slate-200 text-slate-800 rounded-bl-none prose prose-sm max-w-none prose-slate prose-table:w-full prose-thead:bg-slate-300/70 prose-tr:border-b-slate-300/70'}`}>
                                     {msg.sender === 'bot' ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown> : msg.text}
                                 </div>
                             </div>
                         ))}
-                         {isLoading && (
+                        {isLoading && (
                             <div className="flex items-end gap-2 justify-start">
                                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold">P</div>
                                 <div className="px-4 py-3 rounded-2xl bg-slate-200 text-slate-800 rounded-bl-none flex items-center space-x-1">
@@ -196,7 +196,7 @@ const Chatbot: React.FC = () => {
                             />
                             <button onClick={() => handleSend(input)} disabled={isLoading} className="ml-2 flex-shrink-0 w-10 h-10 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-blue-300 flex items-center justify-center">
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                  <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.428A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.428A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
                                 </svg>
                             </button>
                         </div>

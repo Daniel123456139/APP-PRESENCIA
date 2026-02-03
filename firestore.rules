@@ -161,6 +161,18 @@ service cloud.firestore {
       // Escritura: Solo HR y Admin
       allow write: if hasAnyRole(['hr', 'admin']);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: BAJAS (Histórico de Bajas Finalizadas)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /BAJAS/{bajaId} {
+      // Lectura: HR y Admin
+      allow read: if hasAnyRole(['hr', 'admin']);
+      
+      // Escritura: Solo HR y Admin (para mover de activa a historico)
+      allow write: if hasAnyRole(['hr', 'admin']);
+    }
     
     // ═══════════════════════════════════════════════════════════════
     // COLECCIÓN: INCIDENT_LOG

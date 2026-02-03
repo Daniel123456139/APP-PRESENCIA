@@ -5,10 +5,9 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
-    root: 'src',
-    publicDir: '../public',
+    publicDir: 'public',
     build: {
-      outDir: '../dist',
+      outDir: 'dist',
       emptyOutDir: true,
     },
     server: {

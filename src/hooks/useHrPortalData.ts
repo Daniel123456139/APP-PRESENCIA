@@ -238,7 +238,7 @@ export const useHrPortalData = ({
                 const results: { id: number; cal: CalendarioDia[] }[] = [];
 
                 // 🚀 BATCH FETCHING (Limit concurrency to avoid ERR_INSUFFICIENT_RESOURCES)
-                const batchSize = 10;
+                const batchSize = 3; // Reduced from 10 to 3 to be gentler on the server
                 for (let i = 0; i < allActiveOperatorIds.length; i += batchSize) {
                     const batch = allActiveOperatorIds.slice(i, i + batchSize);
                     const batchPromises = batch.map(id =>
@@ -252,6 +252,11 @@ export const useHrPortalData = ({
 
                     const batchResults = await Promise.all(batchPromises);
                     results.push(...batchResults);
+
+                    // Add a small delay between batches
+                    if (i + batchSize < allActiveOperatorIds.length) {
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                    }
                 }
 
                 // Crear mapa por empleado

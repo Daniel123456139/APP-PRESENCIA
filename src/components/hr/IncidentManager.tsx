@@ -1,5 +1,5 @@
 import React, { useState, useImperativeHandle, forwardRef } from 'react';
-import { RawDataRow, ProcessedDataRow, Role, IncidentLogEntry } from '../../types';
+import { RawDataRow, ProcessedDataRow, Role, IncidentLogEntry, UnjustifiedGap, WorkdayDeviation } from '../../types';
 import { useErpDataActions } from '../../store/erpDataStore';
 import { useNotification } from '../shared/NotificationContext';
 import RecordIncidentModal from './RecordIncidentModal';
@@ -11,6 +11,7 @@ import FreeHoursFilterModal from './FreeHoursFilterModal';
 import FutureIncidentsModal from './FutureIncidentsModal';
 import { getMotivosAusencias } from '../../services/erpApi';
 import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
+import { generateGapStrategy, generateFullDayStrategy, generateWorkdayStrategy } from '../../services/incidentStrategies';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
 import { logIncident as logFirestoreIncident } from '../../services/firestoreService';
 
@@ -36,6 +37,8 @@ interface IncidentManagerProps {
     employeeOptions: EmployeeOption[];
     onRefreshNeeded: () => void;
     setIncidentLog: React.Dispatch<React.SetStateAction<IncidentLogEntry[]>>;
+    startDate: string;
+    endDate: string;
 }
 
 const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>((props, ref) => {
@@ -43,7 +46,9 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
         erpData,
         employeeOptions,
         onRefreshNeeded,
-        setIncidentLog
+        setIncidentLog,
+        startDate,
+        endDate
     } = props;
     const { showNotification } = useNotification();
     const { addIncidents, updateRows } = useErpDataActions();
@@ -271,12 +276,10 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     IDControlPresencia: 0,
                     Computable: 'No',
                     TipoDiaEmpresa: 0,
-                    TurnoTexto: selectedEmployeeForManual.turnoAsignado
+                    TurnoTexto: selectedEmployeeForManual.turnoAsignado,
+                    Inicio: shift.start.substring(0, 5),
+                    Fin: shift.end.substring(0, 5)
                 };
-
-                // Check conflicts? User didn't specify conflicts for Case 4, but usually logic implies replacing if exists.
-                // For simplified "Strict Logic", we just insert the requested items. 
-                // Ideally we'd remove conflicting, but let's stick to the Insert instruction.
 
                 await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], "Manual Full Day");
                 showNotification("Día completo registrado.", "success");
@@ -299,271 +302,87 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
         }
     };
 
+    const getIncidentKey = (incident: { type: 'gap' | 'workday' | 'absentDay'; data: UnjustifiedGap | WorkdayDeviation | { date: string } }, employee: ProcessedDataRow) => {
+        if (incident.type === 'gap') {
+            const gapData = incident.data as UnjustifiedGap;
+            const gapStart = normalizeGapTime(gapData.start || '');
+            return `gap-${employee.operario}-${gapData.date}-${gapStart}`;
+        }
+        if (incident.type === 'workday') {
+            const workdayData = incident.data as WorkdayDeviation;
+            return `dev-${employee.operario}-${workdayData.date}`;
+        }
+        const absentData = incident.data as { date: string };
+        return `abs-${employee.operario}-${absentData.date}`;
+    };
+
     const handleJustifyIncident = async (
-        incident: { type: 'gap' | 'workday' | 'absentDay'; data: Record<string, any> },
+        incident: { type: 'gap' | 'workday' | 'absentDay'; data: UnjustifiedGap | WorkdayDeviation | { date: string } },
         reason: { id: number; desc: string },
         employee: ProcessedDataRow
     ) => {
         try {
-            const { type, data } = incident;
-            let newIncidents: RawDataRow[] = [];
-            const shift = getShiftBounds(employee.turnoAsignado);
+            const { type } = incident;
+            let didSave = false;
+            let strategyResult;
 
+            // 1. Delegar la lógica a incidentStrategies.ts
             if (type === 'gap') {
-                const { date, start, end } = data;
-
-                // Normalise times
-                const gapStart = start.length === 5 ? `${start}:00` : start;
-                const gapEnd = end.length === 5 ? `${end}:00` : end;
-                const gapStartShort = normalizeGapTime(gapStart);
-                const gapEndShort = normalizeGapTime(gapEnd);
-
-                // Detect Case
-                const isStartGap = gapStart === shift.start; // Case 2: 07:00 -> ... (Entrada tardía)
-                const isEndGap = gapEnd === shift.end;     // Case 1: ... -> 15:00 (Salida anticipada)
-                // Check if we have an originPunchId (Case 3 - se va y vuelve)
-                const originPunchId = (data as any).originPunchId;
-
-                console.log(`📝 [JUSTIFY GAP] Empleado ${employee.nombre} (${employee.operario}) - Gap: ${gapStart} → ${gapEnd}`);
-                console.log(`   🔍 Detección: isStartGap=${isStartGap}, isEndGap=${isEndGap}, originPunchId=${originPunchId || 'none'}`);
-                console.log(`   ⏰ Turno: ${employee.turnoAsignado} (${shift.start} - ${shift.end})`);
-
-                if (originPunchId) {
-                    // CASE 3 / Early Exit with Existing Punch
-                    // Se va y vuelve: modificar el fichaje de salida intermedia existente
-                    console.log(`   ✏️ CASO 3: Modificar fichaje existente (ID: ${originPunchId})`);
-
-                    const originalRow = erpData.find(r => r.IDControlPresencia === originPunchId);
-
-                    if (!originalRow) {
-                        console.error(`   ❌ ERROR: No se encontró fichaje con ID ${originPunchId}`);
-                        showNotification("Error: No se encontró el fichaje original para actualizar.", "error");
-                        return;
-                    }
-
-                    const updateRow: RawDataRow = {
-                        ...originalRow,
-                        MotivoAusencia: reason.id,
-                        DescMotivoAusencia: reason.desc,
-                        Computable: 'No',
-                        Inicio: gapStartShort,
-                        Fin: gapEndShort
-                    };
-
-                    await updateRows([originalRow], [updateRow]);
-                    console.log(`   ✅ CASO 3: Fichaje actualizado correctamente`);
-                    showNotification("Salida justificada correctamente (Actualización).", "success");
-
-                } else if (isStartGap) {
-                    // CASE 2: Late Entry (Entra tarde justificado)
-                    // ⚠️ CRÍTICO: NO modificar la entrada real (ej: 11:35)
-                    // ✅ INSERTAR par sintético: 
-                    //    - Entrada @ 07:00 (inicio jornada) SIN motivo
-                    //    - Salida @ 11:34 (1 min antes de entrada real) CON motivo
-
-                    console.log(`   🔴 CASO 2 - ENTRADA TARDÍA DETECTADA`);
-                    console.log(`   📌 Acción: Insertar PAR sintético (NO modificar entrada real a las ${gapEnd})`);
-
-                    const timeExit = addMinutes(gapEnd, -1);
-
-                    const entryRow: Partial<RawDataRow> = {
-                        IDOperario: employee.operario,
-                        DescOperario: employee.nombre,
-                        Fecha: date,
-                        Hora: shift.start, // FORZADO 07:00 (inicio jornada)
-                        Entrada: 1,
-                        MotivoAusencia: null, // ✓ SIN MOTIVO (entrada normal)
-                        DescMotivoAusencia: '',
-                        DescDepartamento: employee.colectivo || '',
-                        IDControlPresencia: 0,
-                        Computable: 'Sí',
-                        TipoDiaEmpresa: 0,
-                        TurnoTexto: employee.turnoAsignado
-                    };
-
-                    const exitRow: Partial<RawDataRow> = {
-                        IDOperario: employee.operario,
-                        DescOperario: employee.nombre,
-                        Fecha: date,
-                        Hora: timeExit, // Calculado: gapEnd - 1 min (ej: 11:34)
-                        Entrada: 0,
-                        MotivoAusencia: reason.id, // ✓ CON MOTIVO (justificación)
-                        DescMotivoAusencia: reason.desc,
-                        DescDepartamento: employee.colectivo || '',
-                        IDControlPresencia: 0,
-                        Computable: 'No',
-                        Inicio: normalizeGapTime(shift.start),
-                        Fin: gapEndShort,
-                        TipoDiaEmpresa: 0,
-                        TurnoTexto: employee.turnoAsignado
-                    };
-
-                    console.log(`   ➕ Insertar ENTRADA @ ${shift.start} (sin motivo)`);
-                    console.log(`   ➕ Insertar SALIDA @ ${timeExit} (motivo: ${reason.desc})`);
-                    console.log(`   ⚠️ La entrada real a las ${gapEnd} NO se toca`);
-
-                    await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], "Case 2 Late Entry");
-                    console.log(`   ✅ CASO 2: Par sintético insertado correctamente`);
-                    showNotification("Entrada tardía justificada (Caso 2).", "success");
-
-                } else if (isEndGap) {
-                    // CASE 1: Early Exit (Se va y no vuelve)
-                    // Insertar par sintético:
-                    //    - Entrada @ salida real + 1 min
-                    //    - Salida @ 15:00 (fin jornada) CON motivo
-
-                    console.log(`   🔴 CASO 1 - SALIDA ANTICIPADA DETECTADA`);
-
-                    const timeEntry = addMinutes(gapStart, 1);
-
-                    const entryRow: Partial<RawDataRow> = {
-                        IDOperario: employee.operario,
-                        DescOperario: employee.nombre,
-                        Fecha: date,
-                        Hora: timeEntry, // Salida real + 1 min (ej: 12:01)
-                        Entrada: 1,
-                        MotivoAusencia: null,
-                        DescMotivoAusencia: '',
-                        DescDepartamento: employee.colectivo || '',
-                        IDControlPresencia: 0,
-                        Computable: 'Sí',
-                        TipoDiaEmpresa: 0,
-                        TurnoTexto: employee.turnoAsignado
-                    };
-
-                    const exitRow: Partial<RawDataRow> = {
-                        IDOperario: employee.operario,
-                        DescOperario: employee.nombre,
-                        Fecha: date,
-                        Hora: shift.end, // FORZADO 15:00 (fin jornada)
-                        Entrada: 0,
-                        MotivoAusencia: reason.id,
-                        DescMotivoAusencia: reason.desc,
-                        DescDepartamento: employee.colectivo || '',
-                        IDControlPresencia: 0,
-                        Computable: 'No',
-                        Inicio: gapStartShort,
-                        Fin: normalizeGapTime(shift.end),
-                        TipoDiaEmpresa: 0,
-                        TurnoTexto: employee.turnoAsignado
-                    };
-
-                    console.log(`   ➕ Insertar ENTRADA @ ${timeEntry} (sin motivo)`);
-                    console.log(`   ➕ Insertar SALIDA @ ${shift.end} (motivo: ${reason.desc})`);
-
-                    await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], "Case 1 Early Exit");
-                    console.log(`   ✅ CASO 1: Par sintético insertado correctamente`);
-                    showNotification("Salida anticipada justificada (Caso 1).", "success");
-
-                } else {
-                    // CASE 3: Middle Gap (Se va y vuelve) - SIN originPunchId (fallback)
-                    // Buscar y modificar el fichaje de salida existente
-                    console.log(`   🔵 CASO 3 (fallback sin originPunchId) - Buscando fichaje de salida`);
-
-                    const existingExit = erpData.find(r =>
-                        r.IDOperario === employee.operario &&
-                        r.Fecha === date &&
-                        r.Hora.startsWith(gapStart.substring(0, 5)) && // Match approx hour
-                        r.Entrada === 0
-                    );
-
-                    if (existingExit) {
-                        const updatedRow: RawDataRow = {
-                            ...existingExit,
-                            MotivoAusencia: reason.id,
-                            DescMotivoAusencia: reason.desc,
-                            Computable: 'No',
-                            Inicio: gapStartShort,
-                            Fin: gapEndShort
-                        };
-                        console.log(`   ✏️ Modificar salida existente @ ${existingExit.Hora} (ID: ${existingExit.IDControlPresencia})`);
-                        await updateRows([existingExit], [updatedRow]);
-                        console.log(`   ✅ CASO 3 (fallback): Salida actualizada`);
-                        showNotification("Salida intermedia actualizada (Caso 3).", "success");
-                    } else {
-                        // No se encontró fichaje de salida para modificar
-                        console.warn(`   ⚠️ ADVERTENCIA: No se encontró fichaje de salida @ ${gapStart} para modificar`);
-                        console.warn(`   ℹ️ Puede que sea un gap creado por ausencia total (sin fichajes)`);
-                        showNotification("No se encontró el fichaje de salida para modificar.", 'warning');
-                    }
-                }
-
-                logIncident(employee, reason.id, reason.desc, 'Justificación Hueco', `Gap: ${gapStart}-${gapEnd}`);
-
+                const gapData = incident.data as UnjustifiedGap;
+                strategyResult = generateGapStrategy(gapData, reason, employee);
             } else if (type === 'absentDay') {
-                // CASE 4: Absent Day / Full Day
-                // Insert Entry @ ShiftStart (Null)
-                // Insert Exit @ ShiftEnd (Reason)
-
-                const { date } = data;
-
-                const entryRow: Partial<RawDataRow> = {
-                    IDOperario: employee.operario,
-                    DescOperario: employee.nombre,
-                    Fecha: date,
-                    Hora: shift.start,
-                    Entrada: 1,
-                    MotivoAusencia: null,
-                    DescMotivoAusencia: '',
-                    DescDepartamento: employee.colectivo || '',
-                    IDControlPresencia: 0,
-                    Computable: 'Sí',
-                    TipoDiaEmpresa: 0,
-                    TurnoTexto: employee.turnoAsignado
-                };
-
-                const exitRow: Partial<RawDataRow> = {
-                    IDOperario: employee.operario,
-                    DescOperario: employee.nombre,
-                    Fecha: date,
-                    Hora: shift.end,
-                    Entrada: 0,
-                    MotivoAusencia: reason.id,
-                    DescMotivoAusencia: reason.desc,
-                    DescDepartamento: employee.colectivo || '',
-                    IDControlPresencia: 0,
-                    Computable: 'No',
-                    TipoDiaEmpresa: 0,
-                    TurnoTexto: employee.turnoAsignado
-                };
-
-                await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], "Case 4 Absent Day");
-                showNotification("Día completo justificado (Caso 4).", "success");
-
-                logIncident(employee, reason.id, reason.desc, 'Ausencia Completa', `Día ${date}`);
-
+                const { date } = incident.data as { date: string };
+                strategyResult = generateFullDayStrategy(date, reason, employee);
             } else if (type === 'workday') {
-                // Keep existing workday justification logic (update specific record)
-                // OR adapt if this falls into Case 2/1?
-                // Workday deviation is usually "I clocked out late" or "Clocked in early".
-                // Just use generic update implementation for now as it wasn't strictly redefined in 4 cases.
-                // Actually Case 3 "returns" logic might overlap. 
-                // Let's keep original logic for 'workday' type as it targets specific "fichaje" justification.
-
-                const { date, time, isEntry } = data;
-                const targetTimeShort = time.substring(0, 5);
-
-                const existingRow = erpData.find(row =>
-                    row.IDOperario === employee.operario &&
-                    row.Fecha === date &&
-                    row.Hora.startsWith(targetTimeShort) &&
-                    row.Entrada === (isEntry ? 1 : 0) &&
-                    (row.MotivoAusencia === null || row.MotivoAusencia === 0 || row.MotivoAusencia === 1)
-                );
-
-                if (existingRow) {
-                    const updatedRow: RawDataRow = {
-                        ...existingRow,
-                        MotivoAusencia: reason.id,
-                        DescMotivoAusencia: reason.desc,
-                        Computable: 'No',
-                    };
-                    await updateRows([existingRow], [updatedRow]);
-                    showNotification(`Fichaje justificado.`, "success");
-                }
-                logIncident(employee, reason.id, reason.desc, 'Workday Deviation', `Deviation @ ${time}`);
+                const workdayData = incident.data as WorkdayDeviation;
+                strategyResult = generateWorkdayStrategy(workdayData, reason, employee);
             }
+
+            if (!strategyResult) return;
+
+            console.log(`📝 [JUSTIFY] Estrategia calculada: ${strategyResult.description}`);
+
+            // 2. Ejecutar Acciones (Inserts y Updates)
+            if (strategyResult.rowsToInsert.length > 0) {
+                await addIncidents(strategyResult.rowsToInsert as RawDataRow[], strategyResult.description);
+                didSave = true;
+            }
+
+            if (strategyResult.rowsToUpdate.length > 0) {
+                const updates = strategyResult.rowsToUpdate;
+                const oldRows: RawDataRow[] = [];
+                const newRows: RawDataRow[] = [];
+
+                for (const update of updates) {
+                    const original = erpData.find(r => r.IDControlPresencia === update.IDControlPresencia);
+                    if (original) {
+                        oldRows.push(original);
+                        newRows.push({ ...original, ...update } as RawDataRow);
+                    } else {
+                        console.warn(`No se encontró registro original para update ID ${update.IDControlPresencia}`);
+                    }
+                }
+
+                if (oldRows.length > 0) {
+                    await updateRows(oldRows, newRows);
+                    didSave = true;
+                }
+            }
+
+            if (didSave) {
+                showNotification(strategyResult.description, "success");
+                // logIncident(employee, reason.id, reason.desc, type === 'gap' ? 'Justificación Hueco' : 'Ausencia Completa', strategyResult.description);
+            }
+
             onRefreshNeeded();
+            if (didSave) {
+                const key = getIncidentKey(incident, employee);
+                setJustifiedIncidentKeys(prev => {
+                    const next = new Map(prev);
+                    next.set(key, reason.id);
+                    return next;
+                });
+            }
         } catch (error: unknown) {
             if (error instanceof Error) {
                 console.error("Error justifying incident:", error.message);
@@ -589,6 +408,8 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     isOpen={isManualIncidentModalOpen}
                     onClose={() => setIsManualIncidentModalOpen(false)}
                     employee={selectedEmployeeForManual}
+                    startDate={startDate}
+                    endDate={endDate}
                     onSave={handleManualIncidentSave}
                 />
             )}

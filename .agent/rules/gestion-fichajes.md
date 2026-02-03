@@ -86,36 +86,22 @@ El operario no inicia la jornada a su hora habitual, pero la ausencia está just
 
 
 
-\*\*Descripción\*\*  
+para el caso de los fichajes, cuando un empelado se va y vuelve, se le graba una incidencia.
+el ejemplo sera: el empelado viene de 7 a 8. de 8 a 11 se va, y de 11 a 15 vuelve a su puesto.
 
-El operario interrumpe la jornada, pero regresa y continúa trabajando.
+antes de grabar la incidencia, su fichaje sera:
+entrada 01 a las 07
+salida 01 a las 8:00
+entrada 01 a las 11:00 
+salida 01 a las 15:00
 
-
-
-\*\*Acción requerida\*\*
-
-\- \*\*No insertar nuevos fichajes\*\*.
-
-\- \*\*Modificar el fichaje existente\*\* utilizando el endpoint `/fichajes/updateFichaje`.
-
-\- Cambiar el tipo de la salida intermedia por el \*\*código de incidencia correspondiente\*\*.
-
-
-
-\*\*Ejemplo\*\*
-
-\- Turno mañana:
-
-&nbsp; - Entrada: \*\*07:00\*\*
-
-&nbsp; - Salida: \*\*09:00\*\* (inicialmente “fin de jornada”)
-
-&nbsp; - Entrada: \*\*12:00\*\*
-
-&nbsp; - Salida: \*\*15:00\*\*
-
-\- Acción: modificar la salida de \*\*09:00\*\* a incidencia (ej. `02`).
-
+lo que deberia hcer la app es meter un par de fichajes, una salida y una entrada para justificar la incidecnia. el fichaje quedaria
+entrada 01 a las 07
+salida 01 a las 8:00
+entrada 01 a las 08:01 
+salida 02 (por ejemplo, aqui iria el numero de la incidecia) a las 10:59
+entrada 01 a las 11:00 
+salida 01 a las 15:00
 
 
 ---
@@ -153,10 +139,3 @@ El operario no trabaja durante toda la jornada (incidencia completa o baja).
 &nbsp;   - `11` (baja)
 
 &nbsp;   - Hora: \*\*15:00\*\*
-
-
-
----
-
-
-

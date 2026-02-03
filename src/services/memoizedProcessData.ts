@@ -10,10 +10,10 @@ const cache = new Map<string, ProcessedDataRow[]>();
  */
 const generateCacheKey = (rawData: RawDataRow[], shifts: Shift[], holidays?: Set<string>): string => {
     if (rawData.length === 0) return 'empty';
-    
+
     const first = rawData[0];
     const last = rawData[rawData.length - 1];
-    
+
     let key = `len:${rawData.length}-sLen:${shifts.length}-f:${first.IDOperario}_${first.Fecha}-l:${last.IDOperario}_${last.Fecha}`;
     if (holidays) {
         key += `-h:${holidays.size}`;
@@ -38,8 +38,8 @@ export const processDataMemoized = (rawData: RawDataRow[], shifts: Shift[] = [],
 
     console.debug("🐢 Memoized Miss: Recalculating processData...");
     const result = processData(rawData, shifts, undefined, undefined, holidays);
-    
-    cache.clear(); 
+
+    cache.clear();
     cache.set(key, result);
 
     return result;

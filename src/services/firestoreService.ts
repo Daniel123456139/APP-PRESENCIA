@@ -4,6 +4,7 @@ import {
     updateDoc,
     deleteDoc,
     doc,
+    setDoc,
     serverTimestamp
 } from 'firebase/firestore';
 import { getFirebaseDb } from '../firebaseConfig';
@@ -75,6 +76,35 @@ export async function deleteSickLeave(leaveId: string): Promise<void> {
         logger.success('Baja médica eliminada:', leaveId);
     } catch (error) {
         logger.error('❌ Error eliminando baja:', error);
+        throw error;
+    }
+}
+
+/**
+ * Registrar una baja finalizada en la colección BAJAS
+ */
+export async function upsertClosedSickLeave(leave: {
+    employeeId: string;
+    employeeName: string;
+    type: 'ITEC' | 'ITAT';
+    startDate: string;
+    endDate: string;
+    dischargeDate: string;
+    motivo?: string;
+    closedBy?: string;
+}): Promise<void> {
+    try {
+        const db = getDb();
+        const docId = `${leave.employeeId}_${leave.startDate}`;
+        const docRef = doc(db, 'BAJAS', docId);
+        await setDoc(docRef, {
+            ...leave,
+            status: 'Cerrada',
+            updatedAt: serverTimestamp()
+        }, { merge: true });
+        logger.success('Baja finalizada registrada en BAJAS:', docId);
+    } catch (error) {
+        logger.error('❌ Error registrando baja finalizada en BAJAS:', error);
         throw error;
     }
 }
