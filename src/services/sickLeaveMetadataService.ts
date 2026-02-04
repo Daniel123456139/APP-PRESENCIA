@@ -29,10 +29,10 @@ export const SickLeaveMetadataService = {
             const q = query(collection(db, 'BAJAS_METADATA'));
 
             const snapshot = await getDocs(q);
-            snapshot.forEach(doc => {
-                const data = doc.data();
-                metadataCache.set(doc.id, {
-                    id: doc.id,
+            snapshot.forEach(docItem => {
+                const data = docItem.data();
+                metadataCache.set(docItem.id, {
+                    id: docItem.id,
                     employeeId: data.employeeId || '',
                     startDate: data.startDate || '',
                     nextRevisionDate: data.nextRevisionDate || null,
@@ -44,7 +44,7 @@ export const SickLeaveMetadataService = {
                 });
             });
 
-            console.log(`[SickLeaveMetadata] Loaded ${metadataCache.size} records from Firestore`);
+            console.log('[SickLeaveMetadata] Loaded ' + metadataCache.size + ' records from Firestore');
 
             unsubscribe = onSnapshot(q, (snapshot) => {
                 snapshot.docChanges().forEach(change => {
@@ -65,7 +65,7 @@ export const SickLeaveMetadataService = {
                         metadataCache.delete(change.doc.id);
                     }
                 });
-                console.log(`[SickLeaveMetadata] Cache updated: ${metadataCache.size} records`);
+                console.log('[SickLeaveMetadata] Cache updated: ' + metadataCache.size + ' records');
             });
 
             isInitialized = true;
@@ -81,12 +81,12 @@ export const SickLeaveMetadataService = {
             return null;
         }
 
-        const key = ${ employeeId }_;
+        const key = employeeId + '_' + startDate;
         return metadataCache.get(key) || null;
     },
 
     async update(employeeId, startDate, updates, updatedBy) {
-        const key = ${ employeeId }_;
+        const key = employeeId + '_' + startDate;
         const db = getFirebaseDb();
 
         const metadata = {
@@ -102,10 +102,10 @@ export const SickLeaveMetadataService = {
         try {
             await setDoc(doc(db, 'BAJAS_METADATA', key), metadata);
             metadataCache.set(key, metadata);
-            console.log([SickLeaveMetadata] Updated :, metadata);
+            console.log('[SickLeaveMetadata] Updated ' + key + ':', metadata);
             return metadata;
         } catch (e) {
-            console.error([SickLeaveMetadata] Error updating :, e);
+            console.error('[SickLeaveMetadata] Error updating ' + key + ':', e);
             throw e;
         }
     },
