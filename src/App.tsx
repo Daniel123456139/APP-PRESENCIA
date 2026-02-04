@@ -24,6 +24,7 @@ import { ErpDataProvider, useErpDataActions, useErpDataState } from './store/erp
 import RealtimeNotificationsBridge from './components/shared/RealtimeNotificationsBridge';
 import GlobalStatusPanel from './components/shared/GlobalStatusPanel';
 import { AuditBridge } from './services/AuditBridge';
+import { SickLeaveMetadataService } from './services/sickLeaveMetadataService'; // 🆕 IMPORT
 import { fetchFichajes } from './services/apiService';
 import { getCalendarioEmpresa, CalendarioDia } from './services/erpApi';
 import { SyncService } from './services/syncService';
@@ -89,6 +90,7 @@ const MainRoutes: React.FC = () => {
 
     useEffect(() => {
         AuditBridge.init();
+        SickLeaveMetadataService.init(); // 🆕 INICIALIZACIÓN
         const handleOnline = async () => {
             showNotification("Conexión restablecida. Sincronizando datos pendientes...", "success");
             await SyncService.processQueue();

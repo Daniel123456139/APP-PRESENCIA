@@ -374,7 +374,7 @@ export const useHrPortalData = ({
             reloadFromServer();
             setPrevFilters({ startDate, endDate, startTime, endTime });
         }
-    }, [startDate, endDate, startTime, endTime, prevFilters]);
+    }, [startDate, endDate, startTime, endTime]); // ← FIXED: Removed prevFilters to break infinite loop
 
     const handleFreeHoursExport = async (section: string, filterEmployeeIds: string[]) => {
         showNotification('Generando Excel de Horas Libres...', 'info');

@@ -900,12 +900,25 @@ export const generateProcessedData = (
                     const diffMins = diffMs / 60000;
 
                     if (diffMins > 1) { // 1 minute threshold
-                        // Push to Unjustified Gaps
                         const gapStart = normalizeTimeStr(currentRow.Hora).substring(0, 5);
                         const gapEnd = normalizeTimeStr(returnTime.toTimeString().substring(0, 5)).substring(0, 5);
 
-                        // Avoid duplicates if already processed
-                        if (!employee.unjustifiedGaps.some(g => g.date === currentDateStr && g.start === gapStart)) {
+                        // 🆕 FIX: Verificar si este gap ya está cubierto por una incidencia
+                        const gapStartMin = toMinutes(gapStart);
+                        const gapEndMin = toMinutes(gapEnd);
+                        const justifications = dailyJustifications.get(currentDateStr) || [];
+
+                        let isFullyCovered = false;
+                        for (const j of justifications) {
+                            // Si la justificación cubre completamente el gap, no lo proponer
+                            if (j.start <= gapStartMin && j.end >= gapEndMin) {
+                                isFullyCovered = true;
+                                break;
+                            }
+                        }
+
+                        // Solo agregar gaps NO cubiertos
+                        if (!isFullyCovered && !employee.unjustifiedGaps.some(g => g.date === currentDateStr && g.start === gapStart)) {
                             employee.unjustifiedGaps.push({ date: currentDateStr, start: gapStart, end: gapEnd });
                         }
                     }

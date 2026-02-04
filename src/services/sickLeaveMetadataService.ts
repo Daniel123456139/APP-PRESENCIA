@@ -1,61 +1,122 @@
-
-// Servicio para gestionar datos extra de las bajas que el ERP no soporta nativamente.
-// Se vincula por ID Operario + Fecha Inicio de la baja.
+﻿import { getFirebaseDb } from '../firebaseConfig';
+import { collection, doc, setDoc, onSnapshot, query, Timestamp, getDocs } from 'firebase/firestore';
 
 export interface SickLeaveMetadata {
-    id: string; // Composite key: employeeId_startDateISO
+    id: string;
+    employeeId: string;
+    startDate: string;
     nextRevisionDate?: string | null;
-    dischargeDate?: string | null; // Fecha Alta - triggers move to history
+    dischargeDate?: string | null;
     doctorNotes?: string;
     confirmedByEmployee?: boolean;
+    updatedAt?: any;
+    updatedBy?: string;
 }
 
-import { encryptStorageData, decryptStorageData } from './encryptionService';
-
-const STORAGE_KEY = 'hr_app_sick_leave_metadata';
+const metadataCache = new Map();
+let isInitialized = false;
+let unsubscribe = null;
 
 export const SickLeaveMetadataService = {
-    load(): Record<string, SickLeaveMetadata> {
+    async init() {
+        if (isInitialized) {
+            console.log('[SickLeaveMetadata] Already initialized');
+            return;
+        }
+
         try {
-            const data = localStorage.getItem(STORAGE_KEY);
-            return data ? (decryptStorageData(data) || {}) : {};
+            const db = getFirebaseDb();
+            const q = query(collection(db, 'BAJAS_METADATA'));
+
+            const snapshot = await getDocs(q);
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                metadataCache.set(doc.id, {
+                    id: doc.id,
+                    employeeId: data.employeeId || '',
+                    startDate: data.startDate || '',
+                    nextRevisionDate: data.nextRevisionDate || null,
+                    dischargeDate: data.dischargeDate || null,
+                    doctorNotes: data.doctorNotes || '',
+                    confirmedByEmployee: data.confirmedByEmployee || false,
+                    updatedAt: data.updatedAt,
+                    updatedBy: data.updatedBy
+                });
+            });
+
+            console.log(`[SickLeaveMetadata] Loaded ${metadataCache.size} records from Firestore`);
+
+            unsubscribe = onSnapshot(q, (snapshot) => {
+                snapshot.docChanges().forEach(change => {
+                    if (change.type === 'added' || change.type === 'modified') {
+                        const data = change.doc.data();
+                        metadataCache.set(change.doc.id, {
+                            id: change.doc.id,
+                            employeeId: data.employeeId || '',
+                            startDate: data.startDate || '',
+                            nextRevisionDate: data.nextRevisionDate || null,
+                            dischargeDate: data.dischargeDate || null,
+                            doctorNotes: data.doctorNotes || '',
+                            confirmedByEmployee: data.confirmedByEmployee || false,
+                            updatedAt: data.updatedAt,
+                            updatedBy: data.updatedBy
+                        });
+                    } else if (change.type === 'removed') {
+                        metadataCache.delete(change.doc.id);
+                    }
+                });
+                console.log(`[SickLeaveMetadata] Cache updated: ${metadataCache.size} records`);
+            });
+
+            isInitialized = true;
         } catch (e) {
-            console.error("Error loading sick leave metadata", e);
-            return {};
+            console.error('[SickLeaveMetadata] Error initializing service:', e);
         }
     },
 
-    save(data: Record<string, SickLeaveMetadata>) {
-        try {
-            // Privacy Hardening: Do NOT persist doctorNotes in local storage
-            const safeData: Record<string, SickLeaveMetadata> = {};
-            for (const key in data) {
-                const { doctorNotes, ...rest } = data[key];
-                safeData[key] = rest;
-            }
-            localStorage.setItem(STORAGE_KEY, encryptStorageData(safeData));
-        } catch (e) {
-            console.error("Error saving sick leave metadata", e);
+    get(employeeId, startDate) {
+        if (!isInitialized) {
+            console.warn('[SickLeaveMetadata] Service not initialized, auto-initializing...');
+            this.init();
+            return null;
         }
+
+        const key = ${ employeeId }_;
+        return metadataCache.get(key) || null;
     },
 
-    get(employeeId: number, startDate: string): SickLeaveMetadata | null {
-        const db = this.load();
-        const key = `${employeeId}_${startDate}`;
-        return db[key] || null;
-    },
+    async update(employeeId, startDate, updates, updatedBy) {
+        const key = ${ employeeId }_;
+        const db = getFirebaseDb();
 
-    update(employeeId: number, startDate: string, updates: Partial<SickLeaveMetadata>) {
-        const db = this.load();
-        const key = `${employeeId}_${startDate}`;
-
-        db[key] = {
+        const metadata = {
             id: key,
-            ...db[key],
-            ...updates
+            employeeId: String(employeeId),
+            startDate,
+            ...metadataCache.get(key),
+            ...updates,
+            updatedAt: Timestamp.now(),
+            updatedBy
         };
 
-        this.save(db);
-        return db[key];
+        try {
+            await setDoc(doc(db, 'BAJAS_METADATA', key), metadata);
+            metadataCache.set(key, metadata);
+            console.log([SickLeaveMetadata] Updated :, metadata);
+            return metadata;
+        } catch (e) {
+            console.error([SickLeaveMetadata] Error updating :, e);
+            throw e;
+        }
+    },
+
+    cleanup() {
+        if (unsubscribe) {
+            unsubscribe();
+            unsubscribe = null;
+        }
+        metadataCache.clear();
+        isInitialized = false;
+        console.log('[SickLeaveMetadata] Service cleaned up');
     }
 };
