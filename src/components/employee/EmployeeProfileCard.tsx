@@ -150,7 +150,7 @@ export const EmployeeProfileCard: React.FC<EmployeeProfileCardProps> = ({
                 <div className="text-center">
                     <div className="text-6xl mb-4">⚠️</div>
                     <h3 className="text-xl font-bold text-red-600 mb-2">Error al Cargar Datos</h3>
-                    <p className="text-gray-600 mb-4">{error.message}</p>
+                    <p className="text-gray-600 mb-4">{error}</p>
                     <button
                         onClick={refresh}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"

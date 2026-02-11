@@ -3,7 +3,7 @@ import { processData } from '../services/dataProcessor';
 
 // Escuchar mensajes del hilo principal
 self.onmessage = (e: MessageEvent) => {
-    const { rawData, allUsers, employeeId, analysisRange, holidays } = e.data;
+    const { rawData, allUsers, employeeId, analysisRange, holidays, employeeCalendars } = e.data;
 
     try {
         if (!rawData || !Array.isArray(rawData)) {
@@ -16,8 +16,16 @@ self.onmessage = (e: MessageEvent) => {
             holidaySet = new Set(holidays);
         }
 
+        let calendarMap: Map<number, Map<string, number>> | undefined = undefined;
+        if (employeeCalendars && typeof employeeCalendars === 'object') {
+            calendarMap = new Map();
+            Object.entries(employeeCalendars).forEach(([empId, dateObj]: [string, any]) => {
+                calendarMap!.set(Number(empId), new Map(Object.entries(dateObj)));
+            });
+        }
+
         // Ejecutar la lógica pesada
-        const result = processData(rawData, allUsers || [], employeeId, analysisRange, holidaySet);
+        const result = processData(rawData, allUsers || [], employeeId, analysisRange, holidaySet, calendarMap);
 
         // Devolver resultados
         self.postMessage({

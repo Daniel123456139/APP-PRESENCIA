@@ -1,13 +1,20 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useHrPortalData } from '../hooks/useHrPortalData';
 import { getControlOfPorOperario } from '../services/erpApi';
-import { JobControlEntry, RawDataRow } from '../types';
+import { JobControlEntry, RawDataRow, ProcessedDataRow } from '../types';
+import { CalendarioDia } from '../services/erpApi';
 import { format, differenceInMinutes } from 'date-fns';
 import { useNotification } from '../components/shared/NotificationContext';
-import { ChevronDown, ChevronUp, RefreshCw, AlertTriangle, Smartphone, Layers, Search, PieChart, FileText, BarChart3, CheckCircle2, Clock } from 'lucide-react';
+import { ChevronDown, ChevronUp, RefreshCw, AlertTriangle, Smartphone, Layers, Search, PieChart, FileText, BarChart3, CheckCircle2, Clock, Target } from 'lucide-react';
 import { exportImproductiveRankingToPDF, exportWeeklyJobAuditToPDF, exportImproductiveByArticleToPDF } from '../services/jobAuditExportService';
 import { getImproductiveArticle } from '../data/improductiveArticles';
 import { ProductivityDashboard } from '../components/hr/ProductivityDashboard';
+import PriorityAnalysisModal from '../components/job/PriorityAnalysisModal';
+import { parseExcelFile } from '../services/excelPriorityService';
+import { analyzeEmployeeWorks, calculateGlobalStats } from '../services/priorityAnalysisService';
+import PriorityDashboard from './PriorityDashboard';
+import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
+import { parseLocalDateTime } from '../utils/localDate';
 
 /**
  * Helper para parsear fechas del ERP (dd/MM/yyyy + HH:mm:ss)
@@ -40,20 +47,9 @@ const parseErpDateTime = (fechaStr: string | null, horaStr: string | null): Date
     }
 };
 
-const normalizeDateStr = (raw?: string | null): string => {
-    if (!raw) return '';
-    let clean = raw.includes('T') ? raw.split('T')[0] : raw;
-    if (clean.includes(' ')) clean = clean.split(' ')[0];
-    return clean;
-};
+const normalizeDateStr = (raw?: string | null): string => normalizeDateKey(raw || '');
 
-const normalizeTimeStr = (raw?: string | null): string => {
-    if (!raw) return '';
-    let t = raw;
-    if (t.includes('T')) t = t.split('T')[1];
-    if (t.includes(' ')) t = t.split(' ')[1];
-    return t.substring(0, 5);
-};
+const normalizeTimeStr = (raw?: string | null): string => extractTimeHHMM(raw || '');
 
 const isEntrada = (entrada: boolean | number): boolean => entrada === true || entrada === 1;
 
@@ -77,11 +73,32 @@ const formatShortDate = (dateStr: string): string => {
 };
 
 interface JobManagementProps {
-    initialStartDate?: string;
-    initialEndDate?: string;
+    startDate: string;
+    setStartDate: (v: string) => void;
+    endDate: string;
+    setEndDate: (v: string) => void;
+    startTime?: string;
+    endTime?: string;
+    erpData: RawDataRow[];
+    datasetResumen: ProcessedDataRow[];
+    isReloading: boolean;
+    departmentFilteredEmployees: any[];
+    selectedDepartment: string;
+    setSelectedDepartment: (v: string) => void;
+    computedDepartments: string[];
+    employeeCalendarsByDate: Map<number, Map<string, CalendarioDia>> | null;
+    lastUpdated: number;
+    reloadFromServer: () => Promise<void>;
 }
 
-export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, initialEndDate }) => {
+export const JobManagement: React.FC<JobManagementProps> = ({
+    startDate, setStartDate,
+    endDate, setEndDate,
+    startTime, endTime,
+    erpData, datasetResumen, isReloading,
+    departmentFilteredEmployees, selectedDepartment, setSelectedDepartment, computedDepartments,
+    employeeCalendarsByDate, lastUpdated, reloadFromServer
+}) => {
     // PERSISTENCE KEYS
     const STORAGE_KEY = 'jobAuditState';
 
@@ -98,8 +115,6 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
 
     const storedState = getStoredState();
 
-    const [startDate, setStartDate] = useState(initialStartDate || storedState?.startDate || format(new Date(), 'yyyy-MM-dd'));
-    const [endDate, setEndDate] = useState(initialEndDate || storedState?.endDate || format(new Date(), 'yyyy-MM-dd'));
     const [showDebug, setShowDebug] = useState(false);
     const [searchFilter, setSearchFilter] = useState<string>('');
     const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<Set<number>>(new Set());
@@ -107,38 +122,19 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
     const [showDashboard, setShowDashboard] = useState(false);
 
-    // Sincronizar con fechas globales si cambian (solo si se proveen props explícitas)
-    useEffect(() => {
-        if (initialStartDate) setStartDate(initialStartDate);
-        if (initialEndDate) setEndDate(initialEndDate);
-    }, [initialStartDate, initialEndDate]);
-
-    // Use HR Portal Logic for Presence Calculation
-    const {
-        erpData,
-        datasetResumen,
-        isReloading,
-        departmentFilteredEmployees,
-        selectedDepartment,
-        setSelectedDepartment,
-        computedDepartments,
-        employeeCalendarsByDate,
-        reloadFromServer
-    } = useHrPortalData({
-        startDate,
-        endDate,
-        startTime: '00:00',
-        endTime: '23:59',
-        shifts: [],
-        companyHolidays: [],
-        incidentLog: [],
-        setIncidentLog: () => { },
-        includeAbsencesInResumen: true
-    });
+    // Estados para Análisis de Prioridades
+    const [showPriorityModal, setShowPriorityModal] = useState(false);
+    const [showPriorityDashboard, setShowPriorityDashboard] = useState(false);
+    const [priorityAnalysisData, setPriorityAnalysisData] = useState<{
+        globalStats: any;
+        employeeData: any[];
+        dateRange: { startDate: string; endDate: string };
+    } | null>(null);
 
     const { showNotification } = useNotification();
-    const [jobData, setJobData] = useState<Record<string, JobControlEntry[]>>(storedState?.jobData || {});
+    const [jobData, setJobData] = useState<Record<string, JobControlEntry[]>>({});
     const [loadingJobs, setLoadingJobs] = useState(false);
+    const [jobProgress, setJobProgress] = useState<{ processed: number; total: number } | null>(null);
     const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
 
     // 2. Restore selectedDepartment on mount if exists in storage
@@ -148,16 +144,41 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
         }
     }, []); // Run once on mount
 
-    // 3. Persist State Changes
+    const rangeDays = useMemo(() => {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+        const diff = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+        return Math.max(0, diff) + 1;
+    }, [startDate, endDate]);
+
+    const rangeStartDateTime = useMemo(() => {
+        const timeStr = extractTimeHHMMSS(startTime || '00:00:00') || '00:00:00';
+        return parseLocalDateTime(startDate, timeStr);
+    }, [startDate, startTime]);
+
+    const rangeEndDateTime = useMemo(() => {
+        const timeStr = extractTimeHHMMSS(endTime || '23:59:59') || '23:59:59';
+        const end = parseLocalDateTime(endDate, timeStr);
+        end.setMilliseconds(999);
+        return end;
+    }, [endDate, endTime]);
+
+    const clipIntervalToRange = (start: Date, end: Date) => {
+        if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) return null;
+        const clippedStart = start < rangeStartDateTime ? rangeStartDateTime : start;
+        const clippedEnd = end > rangeEndDateTime ? rangeEndDateTime : end;
+        if (clippedEnd <= clippedStart) return null;
+        return { start: clippedStart, end: clippedEnd };
+    };
+
+    // 3. Persist State Changes (Preferences only)
     useEffect(() => {
         const stateToSave = {
-            startDate,
-            endDate,
-            selectedDepartment,
-            jobData
+            selectedDepartment
         };
         sessionStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-    }, [startDate, endDate, selectedDepartment, jobData]);
+    }, [selectedDepartment]);
     const abortControllerRef = useRef<AbortController | null>(null);
 
     const productiveEmployees = useMemo(() => {
@@ -176,7 +197,8 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                 while (iter <= end) {
                     const dStr = format(iter, 'yyyy-MM-dd');
                     const tipoDia = dateMap.get(dStr)?.TipoDia;
-                    if (tipoDia === '2' || tipoDia === 2) count += 1;
+                    // TipoDia is number, so check for 2 only
+                    if (String(tipoDia) === '2') count += 1;
                     iter.setDate(iter.getDate() + 1);
                 }
                 if (count > 0) map.set(empId, count);
@@ -188,7 +210,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
         erpData.forEach(row => {
             const date = normalizeDateStr(row.Fecha);
             if (!date || date < startDate || date > endDate) return;
-            if (row.TipoDiaEmpresa !== 2) return;
+            if (Number(row.TipoDiaEmpresa) !== 2) return;
             const empId = row.IDOperario;
             if (!byEmployee.has(empId)) byEmployee.set(empId, new Set());
             byEmployee.get(empId)!.add(date);
@@ -314,13 +336,17 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
         // Concurrency Limiter (Batch size 5)
         const batchSize = 5;
         const employeeIds = targetEmployees.map(e => e.id.toString());
+        const shouldProgressiveUpdate = rangeDays <= 7;
+        const timeoutMs = rangeDays > 7 ? 60000 : 10000;
+
+        setJobProgress({ processed: 0, total: employeeIds.length });
 
         try {
             for (let i = 0; i < employeeIds.length; i += batchSize) {
                 const batch = employeeIds.slice(i, i + batchSize);
                 const promises = batch.map(async (id) => {
                     try {
-                        const jobs = await getControlOfPorOperario(id, startDate, endDate);
+                        const jobs = await getControlOfPorOperario(id, startDate, endDate, timeoutMs);
                         newJobData[id] = jobs;
                     } catch (e) {
                         if ((e as Error).name !== 'AbortError') {
@@ -330,8 +356,15 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                 });
                 await Promise.all(promises);
 
-                // Update state progressively for better UX
-                setJobData(prev => ({ ...prev, ...newJobData }));
+                setJobProgress({
+                    processed: Math.min(i + batch.length, employeeIds.length),
+                    total: employeeIds.length
+                });
+
+                // Update state progressively for short ranges only
+                if (shouldProgressiveUpdate || i + batchSize >= employeeIds.length) {
+                    setJobData(prev => ({ ...prev, ...newJobData }));
+                }
             }
             showNotification(`Análisis de trabajos completado.`, 'success');
         } catch (error) {
@@ -341,26 +374,29 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             }
         } finally {
             setLoadingJobs(false);
+            setJobProgress(null);
         }
     };
 
-    // Clear job data ONLY when dates change actively, not on initial mount if restored
-    const isFirstRun = useRef(true);
+    // Auto-load jobs when dates or global data refresh happens
     useEffect(() => {
-        if (isFirstRun.current) {
-            isFirstRun.current = false;
-            // If we have restored data, don't clear it.
-            if (Object.keys(storedState?.jobData || {}).length > 0) {
-                return;
-            }
+        if (!isReloading && startDate && endDate) {
+            setJobData({});
+            fetchJobsForVisibleEmployees();
+        }
+    }, [startDate, endDate, lastUpdated]);
+
+    const handleSearch = async () => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+            showNotification('Rango de fechas inválido.', 'error');
+            return;
         }
         setJobData({});
-    }, [startDate, endDate]);
-
-    const handleSearch = () => {
-        reloadFromServer();
-        fetchJobsForVisibleEmployees();
+        // We only fetch jobs because presence is managed globally by HrLayout
+        await fetchJobsForVisibleEmployees();
     };
+
+    const clampPercent = (value: number) => Math.min(100, Math.max(0, value));
 
     // LOGIC: TIME COVERED (UNION) calculation
     const calculateTimeCovered = (jobs: JobControlEntry[]) => {
@@ -370,12 +406,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
         const intervals = jobs.map(j => {
             const start = parseErpDateTime(j.FechaInicio, j.HoraInicio);
             const end = parseErpDateTime(j.FechaFin, j.HoraFin);
-
-            if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
-                return null;
-            }
-
-            return { start, end };
+            return clipIntervalToRange(start, end);
         }).filter(i => i !== null) as { start: Date, end: Date }[];
 
         if (intervals.length === 0) return 0;
@@ -417,11 +448,12 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             const recordedIncidents = recordedIncidentsByEmployee.get(emp.id) || [];
 
             // Calcular Presencia Total (Tiempo en planta + Justificado)
-            // Usamos horasTotalesConJustificacion (TOTAL) + horasExceso + festivas
+            // Usamos horasTotalesConJustificacion (TOTAL) + horasExceso.
+            // horasTotalesConJustificacion ya incluye presencia + justificadas + TAJ,
+            // y NO debemos sumar festivas de nuevo para evitar doble conteo.
             const totalPresence = presenceRow ?
                 (presenceRow.horasTotalesConJustificacion || 0) +
-                (presenceRow.horasExceso || 0) +
-                (presenceRow.festivas || 0) : 0;
+                (presenceRow.horasExceso || 0) : 0;
 
             const jobs = jobData[emp.id] || [];
 
@@ -431,13 +463,13 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             jobs.forEach(job => {
                 const s = parseErpDateTime(job.FechaInicio, job.HoraInicio);
                 const e = parseErpDateTime(job.FechaFin, job.HoraFin);
-                if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
-                    const d = differenceInMinutes(e, s);
-                    if (d > 0) {
-                        totalJobTimeMinutes += d;
-                        if (getImproductiveArticle(job.IDArticulo)) {
-                            improductiveTimeMinutes += d;
-                        }
+                const clipped = clipIntervalToRange(s, e);
+                if (!clipped) return;
+                const d = differenceInMinutes(clipped.end, clipped.start);
+                if (d > 0) {
+                    totalJobTimeMinutes += d;
+                    if (getImproductiveArticle(job.IDArticulo)) {
+                        improductiveTimeMinutes += d;
                     }
                 }
             });
@@ -517,7 +549,8 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
         const totalPresence = comparisonRows.reduce((acc, row) => acc + row.totalPresence, 0);
         const totalCovered = comparisonRows.reduce((acc, row) => acc + row.totalTimeCovered, 0);
         const totalImproductiveProduced = comparisonRows.reduce((acc, row) => acc + row.improductiveTimeProduced, 0);
-        const occupancy = totalPresence > 0 ? (totalCovered / totalPresence) * 100 : 0;
+        const occupancyRaw = totalPresence > 0 ? (totalCovered / totalPresence) * 100 : 0;
+        const occupancy = clampPercent(occupancyRaw);
         const totalGap = Math.max(0, totalPresence - totalCovered);
 
         return {
@@ -651,6 +684,119 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
             showNotification('❌ Error al exportar el ranking de improductivos', 'error');
         }
     };
+
+    const handleExecutePriorityAnalysis = async (
+        analysisStartDate: string,
+        analysisEndDate: string,
+        excelFile: File
+    ) => {
+        try {
+            showNotification('Procesando archivo Excel...', 'info');
+
+            // 1. Parsear Excel (puede fallar aquí)
+            let priorityArticles;
+            try {
+                priorityArticles = await parseExcelFile(excelFile);
+                console.log(`✅ Excel parseado: ${priorityArticles.length} artículos`);
+            } catch (parseError) {
+                console.error('❌ Error parseando Excel:', parseError);
+                showNotification(
+                    `Error leyendo Excel: ${(parseError as Error).message}. Verifica que el archivo tenga la hoja "BASE DATOS".`,
+                    'error'
+                );
+                return;
+            }
+
+            showNotification(`Se cargaron ${priorityArticles.length} artículos del Excel`, 'success');
+
+            // 2. Usar trabajos ya cargados
+            const allJobs: Record<string, JobControlEntry[]> = {};
+            for (const empId of Object.keys(jobData)) {
+                if (jobData[empId] && jobData[empId].length > 0) {
+                    allJobs[empId] = jobData[empId];
+                }
+            }
+
+            if (Object.keys(allJobs).length === 0) {
+                showNotification('No hay datos de trabajos para analizar. Cargue primero los datos de trabajos.', 'error');
+                return;
+            }
+
+            console.log(`✅ Trabajos cargados: ${Object.keys(allJobs).length} empleados`);
+
+            // 3. Analizar trabajos vs prioridades
+            const analysisDate = new Date(analysisEndDate);
+            const employeeDepartments: Record<string, string> = {};
+            departmentFilteredEmployees.forEach(emp => {
+                employeeDepartments[String(emp.id)] = emp.department || 'Sin sección';
+            });
+
+            const employeeAnalysis = analyzeEmployeeWorks(
+                allJobs,
+                priorityArticles,
+                analysisDate,
+                employeeDepartments
+            );
+            const globalStats = calculateGlobalStats(employeeAnalysis);
+
+            console.log(`✅ Análisis completado: ${employeeAnalysis.length} empleados con datos`);
+
+            // 🔍 DIAGNÓSTICO: Si el resultado está vacío, mostrar info de debugging
+            if (employeeAnalysis.length === 0 || globalStats.totalArticulos === 0) {
+                // Obtener ejemplos para diagnóstico
+                const primerArticuloExcel = priorityArticles[0]?.articulo || 'N/A';
+                const primerEmpleadoId = Object.keys(allJobs)[0];
+                const primerTrabajo = allJobs[primerEmpleadoId]?.[0];
+                const primerArticuloERP = primerTrabajo?.IDArticulo || 'N/A';
+
+                const totalTrabajosERP = Object.values(allJobs).reduce((sum, jobs) => sum + jobs.length, 0);
+
+                console.error('❌ DIAGNÓSTICO: No se encontraron coincidencias');
+                console.error(`📊 Excel parseado: ${priorityArticles.length} artículos`);
+                console.error(`📊 Trabajos ERP: ${totalTrabajosERP} trabajos de ${Object.keys(allJobs).length} empleados`);
+                console.error(`📦 Ejemplo artículo Excel: "${primerArticuloExcel}"`);
+                console.error(`🏭 Ejemplo artículo ERP: "${primerArticuloERP}"`);
+                console.error(`⚠️ Posible causa: Los códigos de artículo no coinciden entre Excel y ERP`);
+
+                showNotification(
+                    `⚠️ DIAGNÓSTICO: No se encontraron coincidencias.\n\n` +
+                    `Excel: ${priorityArticles.length} artículos (ej: "${primerArticuloExcel}")\n` +
+                    `ERP: ${totalTrabajosERP} trabajos (ej: "${primerArticuloERP}")\n\n` +
+                    `Los códigos no coinciden. Revisa la consola (F12) para más detalles.`,
+                    'error'
+                );
+
+                // Aún así mostrar el dashboard vacío para que el usuario vea la interfaz
+            }
+
+            // 4. Guardar resultados y mostrar dashboard
+            setPriorityAnalysisData({
+                globalStats,
+                employeeData: employeeAnalysis,
+                dateRange: {
+                    startDate: analysisStartDate,
+                    endDate: analysisEndDate
+                }
+            });
+
+            setShowPriorityModal(false);
+            setShowPriorityDashboard(true);
+
+            if (employeeAnalysis.length > 0) {
+                showNotification(
+                    `Análisis completado: ${globalStats.totalArticulos} artículos analizados`,
+                    'success'
+                );
+            }
+        } catch (error) {
+            console.error('💥 Error CRÍTICO en análisis de prioridades:', error);
+            showNotification(
+                `Error crítico: ${(error as Error).message}. Revisa la consola.`,
+                'error'
+            );
+        }
+    };
+
     return (
         <div className="p-8 bg-slate-50 min-h-screen">
             <header className="mb-8">
@@ -757,6 +903,21 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                             {isReloading ? 'Calculando Presencia...' : (loadingJobs ? 'Analizando Trabajos...' : 'Auditar')}
                         </button>
 
+                        {loadingJobs && jobProgress?.total ? (
+                            <div className="min-w-[220px]">
+                                <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+                                    <span>Procesados {jobProgress.processed}/{jobProgress.total}</span>
+                                    <span>{Math.round((jobProgress.processed / jobProgress.total) * 100)}%</span>
+                                </div>
+                                <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                                    <div
+                                        className="h-full bg-indigo-500 transition-all"
+                                        style={{ width: `${Math.round((jobProgress.processed / jobProgress.total) * 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        ) : null}
+
                         <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-100/50 rounded-xl border border-slate-200/60 shadow-inner">
                             <div className="flex flex-col mr-2">
                                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter leading-none mb-1">Herramientas de</span>
@@ -788,6 +949,15 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                             >
                                 <Layers className="w-3.5 h-3.5" />
                                 Actividades
+                            </button>
+
+                            <button
+                                onClick={() => setShowPriorityModal(true)}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
+                                title="Análisis de Prioridades de Trabajos"
+                            >
+                                <Target className="w-3.5 h-3.5" />
+                                ANÁLISIS PRIORIDADES
                             </button>
                         </div>
 
@@ -861,7 +1031,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                                 {(globalStats.totalCovered - globalStats.totalImproductiveProduced).toFixed(1)}h
                             </p>
                             <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
-                                {globalStats.totalPresence > 0 ? (((globalStats.totalCovered - globalStats.totalImproductiveProduced) / globalStats.totalPresence) * 100).toFixed(0) : 0}%
+                                {clampPercent(globalStats.totalPresence > 0 ? (((globalStats.totalCovered - globalStats.totalImproductiveProduced) / globalStats.totalPresence) * 100) : 0).toFixed(0)}%
                             </span>
                         </div>
                         <p className="text-[10px] text-slate-400 mt-1">Trabajo real efectivo (neto)</p>
@@ -876,7 +1046,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                         <div className="flex items-baseline gap-2">
                             <p className="text-3xl font-black text-amber-600">{globalStats.totalImproductiveProduced.toFixed(1)}h</p>
                             <span className="text-xs font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-                                {globalStats.totalPresence > 0 ? ((globalStats.totalImproductiveProduced / globalStats.totalPresence) * 100).toFixed(0) : 0}%
+                                {clampPercent(globalStats.totalPresence > 0 ? ((globalStats.totalImproductiveProduced / globalStats.totalPresence) * 100) : 0).toFixed(0)}%
                             </span>
                         </div>
                         <p className="text-[10px] text-slate-400 mt-1">Limpieza, Mantenimiento, etc.</p>
@@ -891,7 +1061,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                         <div className="flex items-baseline gap-2">
                             <p className="text-3xl font-black text-red-600">{globalStats.totalGap.toFixed(1)}h</p>
                             <span className="text-xs font-bold text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
-                                {globalStats.totalPresence > 0 ? ((globalStats.totalGap / globalStats.totalPresence) * 100).toFixed(0) : 0}%
+                                {clampPercent(globalStats.totalPresence > 0 ? ((globalStats.totalGap / globalStats.totalPresence) * 100) : 0).toFixed(0)}%
                             </span>
                         </div>
                         <p className="text-[10px] text-slate-400 mt-1">Tiempo pagado sin actividad</p>
@@ -1175,8 +1345,36 @@ export const JobManagement: React.FC<JobManagementProps> = ({ initialStartDate, 
                 <ProductivityDashboard
                     rows={filteredRows}
                     globalStats={globalStats}
+                    startDate={startDate}
+                    endDate={endDate}
+                    department={selectedDepartment}
                     onClose={() => setShowDashboard(false)}
                 />
+            )}
+
+            {/* Modal de Análisis de Prioridades */}
+            <PriorityAnalysisModal
+                isOpen={showPriorityModal}
+                onClose={() => setShowPriorityModal(false)}
+                onExecute={handleExecutePriorityAnalysis}
+            />
+
+            {/* Dashboard de Prioridades */}
+            {showPriorityDashboard && priorityAnalysisData && (
+                <div className="fixed inset-0 z-50 bg-slate-50 overflow-auto">
+                    <PriorityDashboard
+                        globalStats={priorityAnalysisData.globalStats}
+                        employeeData={priorityAnalysisData.employeeData}
+                        dateRange={priorityAnalysisData.dateRange}
+                        onBack={() => setShowPriorityDashboard(false)}
+                    />
+                    <button
+                        onClick={() => setShowPriorityDashboard(false)}
+                        className="fixed top-4 right-4 px-4 py-2 bg-white rounded-lg shadow-lg hover:bg-slate-100 transition-colors"
+                    >
+                        Cerrar
+                    </button>
+                </div>
             )}
         </div>
     );

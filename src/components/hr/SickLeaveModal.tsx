@@ -87,7 +87,7 @@ const SickLeaveModal: React.FC<SickLeaveModalProps> = ({ isOpen, onClose, onSave
         }
 
         const newLeaveData = {
-            id: leaveToEdit?.id,
+            id: leaveToEdit?.id ? Number(leaveToEdit.id) : undefined,
             employeeId: selectedOperario.IDOperario,
             startDate,
             endDate: endDate || null,

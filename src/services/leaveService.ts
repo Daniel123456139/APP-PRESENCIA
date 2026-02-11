@@ -1,6 +1,7 @@
 
 import { LeaveRange, RawDataRow } from "../types";
 import { toISODateLocal, parseISOToLocalDate } from "../utils/localDate";
+import { normalizeDateKey, extractTimeHHMM } from '../utils/datetime';
 
 /**
  * Agrupa filas individuales de ERP (RawDataRow) en objetos LeaveRange lógicos.
@@ -28,22 +29,23 @@ export const groupRawDataToLeaves = (data: RawDataRow[]): LeaveRange[] => {
 
     for (const row of absenceRows) {
         // Verificar si la fila actual extiende el rango actual
+        const rowDateKey = normalizeDateKey(row.Fecha);
         const isExtension = currentRange &&
             currentRange.employeeId === row.IDOperario &&
             currentRange.motivoId === row.MotivoAusencia &&
             // Check continuity (Is this row date <= currentRange end date + 1 day?)
-            (parseISOToLocalDate(row.Fecha).getTime() <= parseISOToLocalDate(currentRange.endDate).getTime() + (24 * 60 * 60 * 1000) * 1.5); 
+            (parseISOToLocalDate(rowDateKey).getTime() <= parseISOToLocalDate(currentRange.endDate).getTime() + (24 * 60 * 60 * 1000) * 1.5);
 
         if (isExtension && currentRange) {
             // Extender fecha fin
-            if (row.Fecha > currentRange.endDate) {
-                currentRange.endDate = row.Fecha;
+            if (rowDateKey > currentRange.endDate) {
+                currentRange.endDate = rowDateKey;
             }
             currentRange.originalRows.push(row);
         } else {
             // Crear nuevo rango
             const isFullDay = row.Hora === '00:00:00' && (!row.Inicio || row.Inicio === '00:00');
-            
+
             currentRange = {
                 id: `${row.IDOperario}-${row.MotivoAusencia}-${row.Fecha}-${Math.random().toString(36).substr(2, 5)}`,
                 employeeId: row.IDOperario,
@@ -51,10 +53,10 @@ export const groupRawDataToLeaves = (data: RawDataRow[]): LeaveRange[] => {
                 department: row.DescDepartamento,
                 motivoId: row.MotivoAusencia!,
                 motivoDesc: row.DescMotivoAusencia,
-                startDate: row.Fecha,
-                endDate: row.Fecha,
+                startDate: rowDateKey,
+                endDate: rowDateKey,
                 isFullDay: isFullDay,
-                startTime: isFullDay ? undefined : (row.Inicio || row.Hora.substring(0, 5)),
+                startTime: isFullDay ? undefined : (row.Inicio || extractTimeHHMM(row.Hora)),
                 endTime: isFullDay ? undefined : row.Fin,
                 originalRows: [row]
             };

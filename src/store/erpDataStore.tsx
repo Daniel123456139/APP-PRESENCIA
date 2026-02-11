@@ -5,6 +5,7 @@ import { SyncService } from '../services/syncService';
 import { generateRowsFromRange } from '../services/leaveService';
 import { AuditService } from '../services/AuditService';
 import { toISODateLocal } from '../utils/localDate';
+import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
 
 // --- Estado ---
 interface ErpDataState {
@@ -42,7 +43,8 @@ const erpDataReducer = (state: ErpDataState, action: ErpDataAction): ErpDataStat
                 erpData: state.erpData.filter(row => {
                     if (row.IDOperario !== action.payload.employeeId) return true;
                     if (row.MotivoAusencia !== action.payload.motivoId) return true;
-                    return !(row.Fecha >= action.payload.startDate && row.Fecha <= action.payload.endDate);
+                    const dateKey = normalizeDateKey(row.Fecha);
+                    return !(dateKey >= action.payload.startDate && dateKey <= action.payload.endDate);
                 }),
                 lastUpdated: Date.now()
             };
@@ -101,10 +103,11 @@ export const useErpDataActions = () => {
 
         // 1. Pre-procesamiento (Split días)
         for (const row of newRows) {
-            const start = row.Inicio || row.Hora.substring(0, 5);
+            const start = row.Inicio || extractTimeHHMM(row.Hora);
             const end = row.Fin || '';
+            const horaNormalized = extractTimeHHMMSS(row.Hora);
 
-            if (start && end && end < start && row.Hora !== '00:00:00') {
+            if (start && end && end < start && horaNormalized !== '00:00:00') {
                 const row1 = { ...row, Fin: '23:59:59' };
                 const dateObj = new Date(row.Fecha);
                 dateObj.setDate(dateObj.getDate() + 1);
@@ -145,7 +148,7 @@ export const useErpDataActions = () => {
                     r.Fecha === row.Fecha &&
                     r.Entrada === 0 &&
                     (r.MotivoAusencia === 1 || r.MotivoAusencia === null || r.MotivoAusencia === 0) &&
-                    r.Hora.substring(0, 5) === row.Hora.substring(0, 5) // Coincidencia de hora (HH:MM) requerida
+                    extractTimeHHMM(r.Hora) === extractTimeHHMM(row.Hora) // Coincidencia de hora (HH:MM) requerida
                 );
 
                 if (existingExit && existingExit.IDControlPresencia && existingExit.IDControlPresencia > 0) {

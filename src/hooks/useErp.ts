@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { getMotivosAusencias, getCalendarioEmpresa, getOperarios, MotivoAusencia, CalendarioDia, Operario } from '../services/erpApi';
 
 // Simple in-memory cache
@@ -46,8 +46,11 @@ export const useOperarios = (onlyActive = true) => {
 
     const fetchOperarios = useCallback(async (force = false) => {
         if (!force && cache.operarios) {
-            setOperarios(cache.operarios);
-            return;
+            const missingFlexible = cache.operarios.some(op => (op as any).Flexible === undefined);
+            if (!missingFlexible) {
+                setOperarios(cache.operarios);
+                return;
+            }
         }
         setLoading(true);
         try {
@@ -67,18 +70,20 @@ export const useOperarios = (onlyActive = true) => {
     }, [fetchOperarios]);
 
     // Filtrado mejorado: Excluir inactivos, empleados con "zzz" y ID 999
-    const filteredOperarios = operarios.filter(op => {
-        // Excluir ID 999
-        if (op.IDOperario === 999) return false;
+    const filteredOperarios = useMemo(() => {
+        return operarios.filter(op => {
+            // Excluir ID 999
+            if (op.IDOperario === 999) return false;
 
-        // Excluir empleados con "zzz" en descripción (dormidos/inactivos)
-        if (op.DescOperario?.toLowerCase().includes('zzz')) return false;
+            // Excluir empleados con "zzz" en descripción (dormidos/inactivos)
+            if (op.DescOperario?.toLowerCase().includes('zzz')) return false;
 
-        // Si onlyActive está activado, también filtrar por campo Activo
-        if (onlyActive && !op.Activo) return false;
+            // Si onlyActive está activado, también filtrar por campo Activo
+            if (onlyActive && !op.Activo) return false;
 
-        return true;
-    });
+            return true;
+        });
+    }, [operarios, onlyActive]);
 
     return { operarios: filteredOperarios, loading, error, refresh: () => fetchOperarios(true) };
 

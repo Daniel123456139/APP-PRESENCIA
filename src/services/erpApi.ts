@@ -9,11 +9,13 @@ export interface MotivoAusencia {
 
 export interface CalendarioDia {
     Fecha: string; // YYYY-MM-DD
-    TipoDia: "0" | "1"; // "0" = laborable, "1" = festivo
+    TipoDia: "0" | "1" | "2" | string; // "0" = laborable, "1" = festivo, "2" = vacaciones
     DescTipoDia: string;
     IDTipoTurno: string | null;
     DescTurno: string;
     Duracion: number;
+    Inicio?: string;
+    Fin?: string;
 }
 
 export interface Operario {
@@ -23,6 +25,7 @@ export interface Operario {
     DescDepartamento: string;
     Activo: boolean;
     Productivo: boolean;
+    Flexible: boolean;
 }
 
 const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 10000) => {
@@ -146,7 +149,9 @@ export const getCalendarioEmpresa = async (fechaDesde: string, fechaHasta: strin
         DescTipoDia: d.DescTipoDia || '',
         IDTipoTurno: (!d.IDTipoTurno || d.IDTipoTurno === 'None' || d.IDTipoTurno === '') ? null : d.IDTipoTurno,
         DescTurno: d.DescTurno || '',
-        Duracion: parseFloat(d.Duracion) || 0
+        Duracion: parseFloat(d.Duracion) || 0,
+        Inicio: d.Inicio,
+        Fin: d.Fin
     }));
 };
 
@@ -173,7 +178,8 @@ export const getOperarios = async (activo: boolean = true): Promise<Operario[]> 
         IDDepartamento: typeof op.IDDepartamento === 'string' ? parseInt(op.IDDepartamento, 10) : op.IDDepartamento,
         DescDepartamento: op.DescDepartamento,
         Activo: op.Activo === true || op.Activo === 1 || op.Activo === 'true',
-        Productivo: !([false, 0, '0', 'false', 'FALSE', 'False'].includes(op.Productivo ?? op.productivo))
+        Productivo: !([false, 0, '0', 'false', 'FALSE', 'False'].includes(op.Productivo ?? op.productivo)),
+        Flexible: op.Flexible === true || op.Flexible === 1 || op.Flexible === 'true' || op.flexible === true
     }));
 };
 
@@ -216,7 +222,9 @@ export const getCalendarioOperario = async (idOperario: string, fechaDesde: stri
         DescTipoDia: d.DescTipoDia || '',
         IDTipoTurno: (!d.IDTipoTurno || d.IDTipoTurno === 'None' || d.IDTipoTurno === '') ? null : d.IDTipoTurno,
         DescTurno: d.DescTurno || '',
-        Duracion: parseFloat(d.Duracion) || 0
+        Duracion: parseFloat(d.Duracion) || 0,
+        Inicio: d.Inicio,
+        Fin: d.Fin
     }));
 };
 
@@ -248,7 +256,12 @@ export const getControlOfProduccion = async (idOrden: string): Promise<any[]> =>
 /**
  * Obtiene imputaciones por operario
  */
-export const getControlOfPorOperario = async (idOperario: string, fechaDesde: string, fechaHasta: string): Promise<any[]> => {
+export const getControlOfPorOperario = async (
+    idOperario: string,
+    fechaDesde: string,
+    fechaHasta: string,
+    timeoutMs: number = 10000
+): Promise<any[]> => {
     const baseUrl = getApiBaseUrl();
     const url = new URL(`${baseUrl}/fichajes/getControlOfPorOperario`);
 
@@ -271,7 +284,7 @@ export const getControlOfPorOperario = async (idOperario: string, fechaDesde: st
     const response = await fetchWithTimeout(url.toString(), {
         method: 'GET',
         headers: { 'Accept': 'application/json' }
-    });
+    }, timeoutMs);
 
     if (!response.ok) {
         if (response.status === 404) return [];

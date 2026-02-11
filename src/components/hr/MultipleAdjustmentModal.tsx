@@ -1,5 +1,6 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { extractTimeHHMM } from '../../utils/datetime';
 import { RawDataRow } from '../../types';
 
 interface MultipleAdjustmentModalProps {
@@ -8,6 +9,7 @@ interface MultipleAdjustmentModalProps {
     data: RawDataRow[];
     onApply: (updatedRows: RawDataRow[]) => void;
     employeeShifts?: Map<number, string>; // ID -> 'M' | 'TN'
+    flexibleEmployeeIds?: Set<number>;
 }
 
 interface AdjustmentCandidate {
@@ -22,29 +24,29 @@ const toMinutes = (h: number, m: number) => h * 60 + m;
 
 const TARGET_RANGES = [
     {
-        // 07:00 Start: [06:15, 07:00] -> 07:00
+        // 07:00 Start: [06:30, 07:30] -> 07:00 (Ampliado por petición usuario)
         type: 'Entrada',
         targetHour: 7, targetMinute: 0,
-        minMinutes: toMinutes(6, 15),
-        maxMinutes: toMinutes(7, 0)
+        minMinutes: toMinutes(6, 30),
+        maxMinutes: toMinutes(7, 30)
     },
     {
-        // 12:00 End: [12:01, 12:15] -> 12:00
+        // 12:00 End: [11:30, 12:30] -> 12:00
         type: 'Salida',
         targetHour: 12, targetMinute: 0,
-        minMinutes: toMinutes(12, 1),
-        maxMinutes: toMinutes(12, 15)
+        minMinutes: toMinutes(11, 30),
+        maxMinutes: toMinutes(12, 30)
     },
     {
-        // 13:00 End: [13:01, 13:15] -> 13:00
+        // 13:00 End: [12:30, 13:30] -> 13:00
         type: 'Salida',
         targetHour: 13, targetMinute: 0,
-        minMinutes: toMinutes(13, 1),
-        maxMinutes: toMinutes(13, 15)
+        minMinutes: toMinutes(12, 31), // Avoid overlap with 12:30
+        maxMinutes: toMinutes(13, 30)
     }
 ];
 
-const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpen, onClose, data, onApply, employeeShifts }) => {
+const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpen, onClose, data, onApply, employeeShifts, flexibleEmployeeIds }) => {
     const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
 
     // Logic to find candidates
@@ -52,6 +54,7 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
         const results: AdjustmentCandidate[] = [];
 
         data.forEach((row, index) => {
+            if (flexibleEmployeeIds?.has(row.IDOperario)) return;
             // Parse Row Time
             const [hStr, mStr] = row.Hora.split(':');
             const hour = parseInt(hStr, 10);
@@ -293,7 +296,7 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
                                                     {c.type}
                                                 </span>
                                             </td>
-                                            <td className="px-4 py-2 text-right font-mono text-slate-500">{c.originalRow.Hora.substring(0, 5)}</td>
+                                            <td className="px-4 py-2 text-right font-mono text-slate-500">{extractTimeHHMM(c.originalRow.Hora)}</td>
                                             <td className="px-4 py-2 text-center text-slate-300">➔</td>
                                             <td className="px-4 py-2 font-bold font-mono text-blue-700">{c.targetTime.substring(0, 5)}</td>
                                         </tr>

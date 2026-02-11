@@ -6,6 +6,7 @@ import { resolveTurno } from '../utils/turnoResolver';
 import { formatTimeRange } from '../utils/shiftClassifier';
 import { EXCLUDE_EMPLOYEE_IDS } from '../config/exclusions';
 import { toISODateLocal, parseISOToLocalDate, parseLocalDateTime, countWorkingDays } from '../utils/localDate';
+import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
 import { SHIFT_SPECS } from '../core/constants/shifts';
 import {
     toMinutes,
@@ -29,15 +30,15 @@ export const generateProcessedData = (
     const resultsMap = new Map<number, ProcessedDataRow>();
     const userMap = new Map(allUsers.map(u => [u.id, u]));
 
-    const normalizeDateStr = (raw: string): string => {
-        if (!raw) return '1970-01-01';
-        return raw.replace('T', ' ').split(' ')[0];
+    const normalizeDateStr = (raw?: string): string => {
+        const normalized = normalizeDateKey(raw || '');
+        return normalized || '1970-01-01';
     };
 
     // 0. Detectar festivos en los datos crudos (TipoDiaEmpresa = 1)
     const effectiveHolidays = new Set<string>(settingsHolidays);
     rawData.forEach(row => {
-        if (row.TipoDiaEmpresa === 1) {
+        if (Number(row.TipoDiaEmpresa) === 1) {
             effectiveHolidays.add(normalizeDateStr(row.Fecha));
         }
     });
@@ -64,8 +65,9 @@ export const generateProcessedData = (
         let min = '9999-99-99';
         let max = '0000-00-00';
         rawData.forEach(r => {
-            if (r.Fecha < min) min = r.Fecha;
-            if (r.Fecha > max) max = r.Fecha;
+            const dateKey = normalizeDateStr(r.Fecha);
+            if (dateKey < min) min = dateKey;
+            if (dateKey > max) max = dateKey;
         });
         rangeStartDateStr = min;
         rangeEndDateStr = max;
@@ -81,14 +83,14 @@ export const generateProcessedData = (
     const expectedWorkingDays = countWorkingDays(analysisStartStr, analysisEndStr, effectiveHolidays);
     const maxTotalHours = expectedWorkingDays > 0 ? expectedWorkingDays * 8 : 8;
 
-    const normalizeTimeStr = (raw: string): string => {
-        if (!raw) return '00:00';
-        let t = raw;
-        if (t.includes('T')) t = t.split('T')[1];
-        else if (t.includes(' ') && t.includes(':')) {
-            t = t.split(' ')[1];
-        }
-        return t.substring(0, 5);
+    const normalizeTimeStr = (raw?: string): string => {
+        const normalized = extractTimeHHMM(raw || '');
+        return normalized || '00:00';
+    };
+
+    const normalizeTimeStrWithSeconds = (raw?: string): string => {
+        const normalized = extractTimeHHMMSS(raw || '');
+        return normalized || '00:00:00';
     };
 
     const getMotivoAusencia = (value: RawDataRow['MotivoAusencia'] | string | number | null | undefined): number | null => {
@@ -161,6 +163,7 @@ export const generateProcessedData = (
             isFlexible: user?.flexible === true,
             horarioReal: '-',
             timeSlices: [],
+            justifiedIntervals: [],
             totalHoras: 0,
             presencia: 0,
             horasJustificadas: 0,
@@ -209,7 +212,7 @@ export const generateProcessedData = (
                 const aDate = normalizeDateStr(a.Fecha);
                 const bDate = normalizeDateStr(b.Fecha);
                 if (aDate !== bDate) return aDate < bDate ? -1 : 1;
-                return a.Hora.localeCompare(b.Hora);
+                return normalizeTimeStrWithSeconds(a.Hora).localeCompare(normalizeTimeStrWithSeconds(b.Hora));
             });
             // Use the LAST row to get the most recent employee data
             getOrCreateEmployee(id, sortedRows[sortedRows.length - 1]);
@@ -222,8 +225,10 @@ export const generateProcessedData = (
         const employeeRows = dataByEmployee.get(employeeId) || [];
 
         const allRows = employeeRows.sort((a, b) => {
-            if (a.Fecha !== b.Fecha) return a.Fecha < b.Fecha ? -1 : 1;
-            return a.Hora.localeCompare(b.Hora);
+            const aDate = normalizeDateStr(a.Fecha);
+            const bDate = normalizeDateStr(b.Fecha);
+            if (aDate !== bDate) return aDate < bDate ? -1 : 1;
+            return normalizeTimeStrWithSeconds(a.Hora).localeCompare(normalizeTimeStrWithSeconds(b.Hora));
         });
 
         const isAbsenceExitRow = (row: RawDataRow): boolean => {
@@ -371,7 +376,7 @@ export const generateProcessedData = (
                     console.log('🐞 MARIO DEBUG ENTRY:', {
                         shiftCode: currentShiftCode,
                         shiftStart: assignedShift?.start,
-                        isFirstEntry: (!allRows[i - 1] || allRows[i - 1].Fecha !== currentDateStr)
+                        isFirstEntry: (!allRows[i - 1] || normalizeDateStr(allRows[i - 1].Fecha) !== currentDateStr)
                     });
                 }
 
@@ -475,6 +480,21 @@ export const generateProcessedData = (
                         // CRITICAL FIX: Detectar si es un par de justificación (Entrada -> SalidaConMotivo)
                         // Si es así, sumar a acumuladores de justificación y NO a horas de trabajo (horasDia/timeSlices)
                         const isJustifiedPair = isAbsenceExitRow(nextRow) || isManualTajRange;
+                        const isJustifiedExit = nextMotivo !== null && nextMotivo !== 0 && nextMotivo !== 1;
+
+                        if (isJustifiedExit && durationHours > 0) {
+                            const endIsNextDay = endTime.getDate() !== currentDateObj.getDate();
+                            employee.justifiedIntervals.push({
+                                date: currentDateStr,
+                                start: extractTimeHHMM(currentRow.Hora),
+                                end: extractTimeHHMM(nextRow.Hora),
+                                endIsNextDay,
+                                motivoId: Number(nextMotivo),
+                                motivoDesc: nextRow.DescMotivoAusencia || undefined,
+                                source: 'punch',
+                                isSynthetic: currentRow.GeneradoPorApp || nextRow.GeneradoPorApp
+                            });
+                        }
 
                         if (isJustifiedPair && durationHours > 0) {
                             const ma = nextMotivo;
@@ -574,9 +594,10 @@ export const generateProcessedData = (
 
                             const isNextDay = endTime.getDate() !== currentDateObj.getDate();
                             employee.timeSlices.push({
-                                start: currentRow.Hora.substring(0, 5),
-                                end: nextRow.Hora.substring(0, 5),
-                                endIsNextDay: isNextDay
+                                start: extractTimeHHMM(currentRow.Hora),
+                                end: extractTimeHHMM(nextRow.Hora),
+                                endIsNextDay: isNextDay,
+                                isSynthetic: currentRow.GeneradoPorApp || nextRow.GeneradoPorApp
                             });
 
                             const startHour = effectiveStart.getHours();
@@ -911,13 +932,13 @@ export const generateProcessedData = (
                     i = j;
                 } else {
                     employee.timeSlices.push({
-                        start: currentRow.Hora.substring(0, 5),
+                        start: extractTimeHHMM(currentRow.Hora),
                         end: '??:??',
                         endIsNextDay: false
                     });
                     sliceFestiveFlags.get(employeeId)?.push(false); // Orphan, doesn't matter
 
-                    const timestamp = `${currentRow.Fecha} ${currentRow.Hora.substring(0, 5)}`;
+                    const timestamp = `${normalizeDateStr(currentRow.Fecha)} ${extractTimeHHMM(currentRow.Hora)}`;
                     if (!employee.missingClockOuts.includes(timestamp)) {
                         employee.missingClockOuts.push(timestamp);
                     }
@@ -941,7 +962,7 @@ export const generateProcessedData = (
                     absenceMinutes = clampToShiftMinutes(startMin, endMin, shiftBounds.start, shiftBounds.end);
                 } else {
                     const horaStr = normalizeTimeStr(currentRow.Hora || '');
-                    const isFullDayAbsence = horaStr === '00:00' || horaStr === '00:00:00' || !horaStr;
+                    const isFullDayAbsence = !horaStr || horaStr === '00:00';
 
                     if (isFullDayAbsence) {
                         let shiftEnd = shiftBounds.end;
@@ -1037,8 +1058,8 @@ export const generateProcessedData = (
                     const diffMins = diffMs / 60000;
 
                     if (diffMins > 1) { // 1 minute threshold
-                        const gapStart = normalizeTimeStr(currentRow.Hora).substring(0, 5);
-                        const gapEnd = normalizeTimeStr(returnTime.toTimeString().substring(0, 5)).substring(0, 5);
+                        const gapStart = normalizeTimeStr(currentRow.Hora);
+                        const gapEnd = normalizeTimeStr(returnTime.toTimeString().substring(0, 5));
 
                         // 🆕 FIX: Verificar si este gap ya está cubierto por una incidencia
                         const gapStartMin = toMinutes(gapStart);
@@ -1212,7 +1233,7 @@ export const generateProcessedData = (
                     // 1. Entrada Tardía Synthesized
                     if (firstP && normalizeTimeStr(firstP.Hora) > sStart) {
                         const gapStart = sStart;
-                        const gapEnd = normalizeTimeStr(firstP.Hora).substring(0, 5);
+                        const gapEnd = normalizeTimeStr(firstP.Hora);
                         const gapDiff = toMinutes(gapEnd) - toMinutes(gapStart);
 
                         if (gapDiff > 1 && !employee.unjustifiedGaps.some(g => g.date === date && g.start === gapStart)) {
@@ -1293,8 +1314,8 @@ export const generateProcessedData = (
                         employee.workdayDeviations.push({
                             date: date,
                             actualHours: totalHours,
-                            start: firstP ? normalizeTimeStr(firstP.Hora).substring(0, 5) : undefined,
-                            end: lastP ? normalizeTimeStr(lastP.Hora).substring(0, 5) : undefined
+                            start: firstP ? normalizeTimeStr(firstP.Hora) : undefined,
+                            end: lastP ? normalizeTimeStr(lastP.Hora) : undefined
                         });
                     }
                 }
@@ -1371,7 +1392,7 @@ export const generateProcessedData = (
             const vacationDates = new Set<string>();
             allRows.forEach(r => {
                 if (r.TipoDiaEmpresa === 2) {
-                    vacationDates.add(r.Fecha);
+                    vacationDates.add(normalizeDateStr(r.Fecha));
                 }
             });
 
@@ -1379,7 +1400,7 @@ export const generateProcessedData = (
             vacationDates.forEach(vDate => {
                 const hasPunches = allRows.some(r => {
                     const ma = getMotivoAusencia(r.MotivoAusencia);
-                    return r.Fecha === vDate &&
+                    return normalizeDateStr(r.Fecha) === vDate &&
                         isEntrada(r.Entrada) &&
                         (ma === null || ma === 0 || ma === 1);
                 });
@@ -1399,8 +1420,12 @@ export const generateProcessedData = (
             const curr = new Date(start);
             let absentGuard = 0;
 
-            while (curr <= end && absentGuard < 4000) {
+            while (curr <= end) {
                 absentGuard++;
+                if (absentGuard > 4000) {
+                    console.error('[AbsentDays] Guard limit reached, breaking loop.', { employeeId, analysisStart: analysisStartStr, analysisEnd: analysisEndStr });
+                    break;
+                }
                 const dayOfWeek = curr.getDay();
                 const dateStr = toISODateLocal(curr);
 

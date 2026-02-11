@@ -22,3 +22,29 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Outputs y logs
+output*.txt
+tsc_output*.txt
+*.log
+
+# Archivos locales
+*.local
+.env.local
+
+# Archivos temporales
+*_temp.*
+*_old.*
+*_backup.*
+
+
+# Secretos y Entorno
+.env
+
+# Documentación sensible
+docs/*.xlsx
+
+# Scripts de reproducción y tests temporales
+repro_*
+test_*
+scripts/test-*

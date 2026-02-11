@@ -9,9 +9,12 @@ import {
     Filter,
     ArrowUpRight,
     ArrowDownRight,
-    Layers
+    Layers,
+    FileDown
 } from 'lucide-react';
 import { getImproductiveArticle } from '../../data/improductiveArticles';
+import { exportProductivityDashboardToPDF } from '../../services/productivityDashboardExportService';
+import { useNotification } from '../shared/NotificationContext';
 
 interface DashboardProps {
     rows: any[];
@@ -22,11 +25,45 @@ interface DashboardProps {
         totalGap: number;
         occupancy: number;
     };
+    startDate: string;
+    endDate: string;
+    department: string;
     onClose: () => void;
 }
 
-export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalStats, onClose }) => {
+export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalStats, startDate, endDate, department, onClose }) => {
     const [filterSection, setFilterSection] = useState<string>('all');
+    const { showNotification } = useNotification();
+
+    const getJobDurationHours = (job: any): number => {
+        try {
+            const cleanFecha = (job.FechaInicio || '').includes('T')
+                ? job.FechaInicio.split('T')[0]
+                : job.FechaInicio;
+            let day: number, month: number, year: number;
+            if (cleanFecha.includes('/')) {
+                [day, month, year] = cleanFecha.split('/').map(Number);
+            } else {
+                [year, month, day] = cleanFecha.split('-').map(Number);
+            }
+
+            let cleanHora = job.HoraInicio || '00:00:00';
+            if (cleanHora.includes('T')) cleanHora = cleanHora.split('T')[1];
+            const [startHour, startMin] = cleanHora.split(':').map(Number);
+
+            let cleanHoraEnd = job.HoraFin || '00:00:00';
+            if (cleanHoraEnd.includes('T')) cleanHoraEnd = cleanHoraEnd.split('T')[1];
+            const [endHour, endMin] = cleanHoraEnd.split(':').map(Number);
+
+            const start = new Date(year, month - 1, day, startHour || 0, startMin || 0);
+            const end = new Date(year, month - 1, day, endHour || 0, endMin || 0);
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+            const duration = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+            return duration > 0 ? duration : 0;
+        } catch {
+            return 0;
+        }
+    };
 
     // 1. Process Data for Charts
     const statsBySection = useMemo(() => {
@@ -74,6 +111,7 @@ export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalSt
             }));
     }, [filteredRows]);
 
+
     const filteredStats = useMemo(() => {
         if (filterSection === 'all') return globalStats;
         const sectionData = statsBySection.find(s => s.name === filterSection);
@@ -88,6 +126,34 @@ export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalSt
         };
     }, [filterSection, globalStats, statsBySection]);
 
+    const activityRows = useMemo(() => {
+        const map = new Map<string, { name: string; hours: number; count: number }>();
+        filteredRows.forEach(row => {
+            row.jobs.forEach((job: any) => {
+                const article = getImproductiveArticle(job.IDArticulo);
+                if (!article) return;
+                const duration = getJobDurationHours(job);
+                if (duration <= 0) return;
+                const key = job.IDArticulo;
+                const current = map.get(key) || { name: article.desc, hours: 0, count: 0 };
+                current.hours += duration;
+                current.count += 1;
+                map.set(key, current);
+            });
+        });
+
+        const totalImproductive = filteredStats.totalImproductiveProduced;
+        return Array.from(map.entries())
+            .map(([id, data]) => ({
+                id,
+                name: data.name,
+                hours: data.hours,
+                count: data.count,
+                percent: totalImproductive > 0 ? (data.hours / totalImproductive) * 100 : 0
+            }))
+            .sort((a, b) => b.hours - a.hours);
+    }, [filteredRows, filteredStats.totalImproductiveProduced]);
+
     // Calcular porcentajes globales para las tarjetas
     const pctProductive = filteredStats.totalPresence > 0
         ? ((filteredStats.totalCovered - filteredStats.totalImproductiveProduced) / filteredStats.totalPresence) * 100
@@ -101,24 +167,60 @@ export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalSt
         ? (filteredStats.totalGap / filteredStats.totalPresence) * 100
         : 0;
 
+    const handleExportPDF = async () => {
+        try {
+            showNotification('Generando PDF del dashboard...', 'info');
+            await exportProductivityDashboardToPDF(
+                filteredStats,
+                topImproductiveEmployees,
+                activityRows,
+                statsBySection,
+                {
+                    startDate,
+                    endDate,
+                    department,
+                    section: filterSection
+                }
+            );
+            showNotification('✅ PDF generado correctamente', 'success');
+        } catch (error) {
+            console.error('Error exportando PDF dashboard:', error);
+            showNotification('❌ Error al generar el PDF del dashboard', 'error');
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-50 bg-slate-100 overflow-y-auto animate-in fade-in duration-200">
             {/* Header */}
             <div className="bg-white shadow-sm border-b border-slate-200 sticky top-0 z-10">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+                <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
                         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
                             <BarChart3 className="w-8 h-8 text-indigo-600" />
                             Dashboard de Productividad Interactiva
                         </h2>
                         <p className="text-slate-500 text-sm">Análisis en tiempo real de eficiencia y costes ocultos</p>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100">Periodo: {startDate} - {endDate}</span>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100">Departamento: {department === 'all' ? 'Todos' : department}</span>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-100">Seccion: {filterSection === 'all' ? 'Global' : filterSection}</span>
+                        </div>
                     </div>
-                    <button
-                        onClick={onClose}
-                        className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors"
-                    >
-                        Cerrar Informe
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleExportPDF}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold transition-colors flex items-center gap-2"
+                        >
+                            <FileDown className="w-4 h-4" />
+                            Exportar PDF
+                        </button>
+                        <button
+                            onClick={onClose}
+                            className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-medium transition-colors"
+                        >
+                            Cerrar Informe
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -258,10 +360,10 @@ export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalSt
                                         <span className="font-bold text-amber-600">{emp.hours.toFixed(2)}h ({emp.percent.toFixed(0)}%)</span>
                                     </div>
                                     <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                                        <div
-                                            className="bg-amber-400 h-full rounded-full"
-                                            style={{ width: `${(emp.hours / topImproductiveEmployees[0].hours) * 100}%` }}
-                                        />
+                                            <div
+                                                className="bg-amber-400 h-full rounded-full"
+                                                style={{ width: `${topImproductiveEmployees[0]?.hours ? (emp.hours / topImproductiveEmployees[0].hours) * 100 : 0}%` }}
+                                            />
                                     </div>
                                 </div>
                             ))}
@@ -278,72 +380,24 @@ export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalSt
                             Distribución por Actividad Improductiva
                         </h3>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            {Object.entries(
-                                filteredRows.reduce((acc, row) => {
-                                    row.jobs.forEach((job: any) => {
-                                        const article = getImproductiveArticle(job.IDArticulo);
-                                        if (article) {
-                                            // Helper para parsear fechas
-                                            const parseDate = (d: string, t: string) => {
-                                                try {
-                                                    const cleanFecha = d.includes('T') ? d.split('T')[0] : d;
-                                                    let day, month, year;
-                                                    if (cleanFecha.includes('/')) {
-                                                        [day, month, year] = cleanFecha.split('/').map(Number);
-                                                    } else {
-                                                        [year, month, day] = cleanFecha.split('-').map(Number);
-                                                    }
-
-                                                    let cleanHora = t || '00:00:00';
-                                                    if (cleanHora.includes('T')) cleanHora = cleanHora.split('T')[1];
-                                                    const [hour, min] = cleanHora.split(':').map(Number);
-
-                                                    return new Date(year, month - 1, day, hour || 0, min || 0);
-                                                } catch {
-                                                    return new Date(NaN);
-                                                }
-                                            };
-
-                                            const start = parseDate(job.FechaInicio, job.HoraInicio);
-                                            const end = parseDate(job.FechaFin, job.HoraFin);
-
-                                            if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-                                                const duration = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-                                                if (duration > 0) {
-                                                    const key = job.IDArticulo;
-                                                    if (!acc[key]) acc[key] = { name: article.desc, hours: 0, count: 0 };
-                                                    acc[key].hours += duration;
-                                                    acc[key].count++;
-                                                }
-                                            }
-                                        }
-                                    });
-                                    return acc;
-                                }, {} as Record<string, { name: string; hours: number; count: number }>)
-                            )
-                                .sort((a, b) => b[1].hours - a[1].hours)
-                                .map(([id, data]) => (
-                                    <div key={id} className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col justify-between">
-                                        <div>
-                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{id}</span>
-                                            <h4 className="text-xs font-bold text-slate-700 mt-1 line-clamp-1" title={data.name}>{data.name}</h4>
+                            {activityRows.map(activity => (
+                                <div key={activity.id} className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col justify-between">
+                                    <div>
+                                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">{activity.id}</span>
+                                        <h4 className="text-xs font-bold text-slate-700 mt-1 line-clamp-1" title={activity.name}>{activity.name}</h4>
+                                    </div>
+                                    <div className="mt-3 flex justify-between items-end">
+                                        <div className="flex flex-col">
+                                            <span className="text-xs font-medium text-slate-400">{activity.count} veces</span>
+                                            <span className="text-lg font-black text-orange-600">{activity.hours.toFixed(1)}h</span>
                                         </div>
-                                        <div className="mt-3 flex justify-between items-end">
-                                            <div className="flex flex-col">
-                                                <span className="text-xs font-medium text-slate-400">{data.count} veces</span>
-                                                <span className="text-lg font-black text-orange-600">{data.hours.toFixed(1)}h</span>
-                                            </div>
-                                            <div className="w-12 h-12 flex items-center justify-center rounded-full bg-orange-100/50 text-orange-600">
-                                                <span className="text-xs font-black">
-                                                    {filteredStats.totalImproductiveProduced > 0
-                                                        ? ((data.hours / filteredStats.totalImproductiveProduced) * 100).toFixed(0)
-                                                        : 0}%
-                                                </span>
-                                            </div>
+                                        <div className="w-12 h-12 flex items-center justify-center rounded-full bg-orange-100/50 text-orange-600">
+                                            <span className="text-xs font-black">{activity.percent.toFixed(0)}%</span>
                                         </div>
                                     </div>
-                                ))}
-                            {filteredStats.totalImproductiveProduced === 0 && (
+                                </div>
+                            ))}
+                            {activityRows.length === 0 && (
                                 <div className="col-span-full py-10 text-center text-slate-400 italic">
                                     No se han detectado actividades improductivas en la selección actual.
                                 </div>

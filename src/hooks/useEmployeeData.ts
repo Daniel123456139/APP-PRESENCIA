@@ -196,6 +196,7 @@ export const useEmployeeData = (options: UseEmployeeDataOptions = {}): UseEmploy
                             DescOperario: apiIdentity?.DescOperario || data.DescOperario || `Empleado ${docId}`,
                             Activo: data.Activo ?? true,
                             Productivo: apiIdentity?.Productivo ?? data.Productivo ?? true,
+                            Flexible: data.Flexible ?? false,
                             IDDepartamento: apiIdentity ? apiIdentity.IDDepartamento : parseInt(data.IDDepartamento || '0', 10),
                             DescDepartamento: apiIdentity?.DescDepartamento || data.DescDepartamento || data.Seccion || '',
 

@@ -16,6 +16,7 @@ interface HrDataTableProps {
     endDate?: string;
     companyHolidays?: CompanyHoliday[];
     isLongRange?: boolean;
+    flexibleEmployeeIds?: Set<number>;
 }
 
 // Helpers for keys
@@ -199,13 +200,100 @@ export const ScheduleCell: React.FC<{
                             </div>
                             <div className="space-y-1.5">
                                 {row.timeSlices && row.timeSlices.map((slice, idx) => (
-                                    <div key={idx} className="font-mono text-xs text-blue-700 whitespace-nowrap bg-blue-50 px-2 py-1 rounded border border-blue-100">
-                                        {slice.start} - {slice.end}
+                                    <div key={idx} className={`font-mono text-xs whitespace-nowrap px-2 py-1 rounded border ${slice.isSynthetic ? 'bg-purple-50 text-purple-700 border-purple-200 dashed-border' : 'bg-blue-50 text-blue-700 border-blue-100'}`}>
+                                        {slice.start} - {slice.end} {slice.isSynthetic && <span className="text-[10px] ml-1">🤖</span>}
                                     </div>
                                 ))}
                                 {(!row.timeSlices || row.timeSlices.length === 0) && (
                                     <div className="text-xs text-slate-400">Sin intervalos registrados</div>
                                 )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const formatShortDate = (dateStr: string): string => {
+    try {
+        const [year, month, day] = dateStr.split('-');
+        if (!year || !month || !day) return dateStr;
+        return `${day}/${month}`;
+    } catch {
+        return dateStr;
+    }
+};
+
+export const JustifiedCell: React.FC<{
+    row: ProcessedDataRow;
+    startDate?: string;
+    endDate?: string;
+    align?: 'left' | 'right' | 'center';
+}> = ({ row, startDate, endDate, align = 'left' }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+            }
+        };
+        if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [isOpen]);
+
+    const intervals = row.justifiedIntervals || [];
+    const hasIntervals = intervals.length > 0;
+    const isMultiDay = useMemo(() => {
+        if (startDate && endDate) return startDate !== endDate;
+        const uniqueDates = new Set(intervals.map(i => i.date));
+        return uniqueDates.size > 1;
+    }, [startDate, endDate, intervals]);
+
+    const justify = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start';
+
+    return (
+        <div className={`relative flex items-center gap-2 ${justify}`}>
+            <span className="font-mono text-blue-600">{row.horasJustificadas.toFixed(2)} h</span>
+            {hasIntervals && (
+                <div>
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setIsOpen(!isOpen); }}
+                        className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded hover:bg-blue-200 border border-blue-200 transition-colors"
+                    >
+                        Detalle
+                    </button>
+                    {isOpen && (
+                        <div
+                            ref={dropdownRef}
+                            className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 shadow-xl rounded-lg p-3 min-w-[220px] animate-fadeIn"
+                        >
+                            <div className="text-[11px] font-bold text-slate-600 mb-2 border-b border-slate-100 pb-1">
+                                Tramos Justificados
+                            </div>
+                            <div className="space-y-1.5">
+                                {intervals.map((interval, idx) => (
+                                    <div key={idx} className={`font-mono text-xs whitespace-nowrap px-2 py-1 rounded border mb-1 last:mb-0 ${interval.isSynthetic
+                                        ? 'bg-purple-100 text-purple-800 border-purple-300 dashed-border'
+                                        : 'bg-amber-100 text-amber-800 border-amber-200'
+                                        }`}>
+                                        <div className="flex items-center gap-1">
+                                            <span>{interval.start} - {interval.end}</span>
+                                            {interval.isSynthetic && <span className="text-[10px]">🤖</span>}
+                                        </div>
+                                        <div className="text-[10px] opacity-75 truncate max-w-[120px]" title={interval.motivoDesc}>
+                                            {interval.motivoDesc || `Motivo ${interval.motivoId}`}
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
                     )}
@@ -226,7 +314,8 @@ const SummaryView: React.FC<{
     endDate?: string;
     companyHolidays?: CompanyHoliday[];
     isLongRange?: boolean;
-}> = memo(({ data, rawData, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, companyHolidays, isLongRange }) => {
+    flexibleEmployeeIds?: Set<number>;
+}> = memo(({ data, rawData, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, companyHolidays, isLongRange, flexibleEmployeeIds }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [sortConfig, setSortConfig] = useState<{ key: SortableKeys; direction: SortDirection } | null>({ key: 'operario', direction: 'ascending' });
 
@@ -291,7 +380,7 @@ const SummaryView: React.FC<{
                     valA = turnoRank(a.turnoAsignado);
                     valB = turnoRank(b.turnoAsignado);
                     isNumeric = true;
-                } else if (['operario', 'totalHoras', 'presencia', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'hTAJ', 'incidentCount'].includes(key as string)) {
+                } else if (['operario', 'totalHoras', 'presencia', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'festivas', 'hTAJ', 'incidentCount'].includes(key as string)) {
                     isNumeric = true;
                 }
 
@@ -312,18 +401,21 @@ const SummaryView: React.FC<{
     }, [augmentedData, searchTerm, sortConfig]);
 
     return (
-        <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
-            <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-4">
+        <div className="bg-white/90 p-5 sm:p-6 rounded-2xl shadow-lg border border-slate-200/70">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-5 gap-4">
                 <div>
-                    <h3 className="text-xl font-semibold text-slate-700">Resumen de Empleados</h3>
+                    <h3 className="text-lg font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white text-[11px]">⚡</span>
+                        Resumen Empleados
+                    </h3>
                     {startDate && endDate && (
-                        <p className="text-sm text-slate-500 mt-1">Periodo: {formatPeriodoAnalisis(startDate, endDate)}</p>
+                        <p className="text-sm text-slate-600 mt-1">Periodo: {formatPeriodoAnalisis(startDate, endDate)}</p>
                     )}
                 </div>
                 <div className="flex flex-col sm:flex-row gap-3 items-center">
                     <button
                         onClick={onExport}
-                        className="flex items-center gap-2 px-3 py-2 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 border border-green-200 transition-colors text-sm font-semibold"
+                        className="flex items-center gap-2 px-3 py-2 bg-white text-emerald-700 rounded-lg hover:bg-emerald-50 border border-emerald-200 transition-colors text-sm font-semibold shadow-sm"
                         title="Exportar tabla a Excel"
                     >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -340,15 +432,15 @@ const SummaryView: React.FC<{
                             placeholder="Buscar por nombre o ID..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full sm:w-64 pl-10 pr-4 py-2 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                            className="w-full sm:w-64 pl-10 pr-4 py-2 border border-slate-200 bg-slate-50 text-slate-900 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                         />
                     </div>
                 </div>
             </div>
 
-            <div className="hidden md:block overflow-auto max-h-[600px] border rounded-lg relative scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
+            <div className="hidden md:block overflow-auto max-h-[600px] border border-slate-200 rounded-xl relative scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
                 <table className="w-full text-sm text-left text-slate-500">
-                    <thead className="bg-slate-100 border-b border-slate-200 sticky top-0 z-10">
+                    <thead className="bg-slate-100/80 border-b border-slate-200 sticky top-0 z-10">
                         <tr>
                             <TableHeader colKey="operario" label="ID" currentSort={sortConfig} onSort={handleSort} className="rounded-tl-lg w-20" />
                             <TableHeader colKey="nombre" label="NOMBRE" currentSort={sortConfig} onSort={handleSort} />
@@ -358,6 +450,7 @@ const SummaryView: React.FC<{
                             <TableHeader colKey="horasJustificadas" label="JUSTIFICADAS (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="horasTotalesConJustificacion" label="TOTAL (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="horasExceso" label="EXCESOS (h)" currentSort={sortConfig} onSort={handleSort} />
+                            <TableHeader colKey="festivas" label="FESTIVAS (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="hTAJ" label="TAJ" currentSort={sortConfig} onSort={handleSort} />
                             {isLongRange && (
                                 <TableHeader colKey="absentDays" label="AUSENCIAS" currentSort={sortConfig} onSort={handleSort} />
@@ -378,7 +471,10 @@ const SummaryView: React.FC<{
                             const hasMissingOut = row.missingClockOuts && row.missingClockOuts.length > 0;
                             const hasPendingIncidents = row.incidentCount > 0;
 
-                            const rowClass = "bg-white hover:bg-slate-50 border-l-4 border-l-transparent";
+                            const isFlexible = row.isFlexible || flexibleEmployeeIds?.has(row.operario);
+                            const rowClass = isFlexible
+                                ? "bg-emerald-50 hover:bg-emerald-100 border-l-4 border-l-emerald-400"
+                                : "bg-white hover:bg-slate-50 border-l-4 border-l-transparent";
 
 
                             return (
@@ -417,12 +513,12 @@ const SummaryView: React.FC<{
                                     </td>
                                     <td className="px-4 py-4">
                                         <div className="flex flex-col gap-1">
-                                            <span className={`px-2 py-1 rounded-full text-xs font-bold w-fit ${row.turnoAsignado === 'M' ? 'bg-yellow-100 text-yellow-800' : 'bg-indigo-100 text-indigo-800'}`}>
+                                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider w-fit ${row.turnoAsignado === 'M' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}`}>
                                                 {row.turnoAsignado}
                                             </span>
                                             {isLongRange && row.shiftChanges && row.shiftChanges.length > 0 && (
                                                 <div className="relative group/tooltip">
-                                                    <button className="text-[10px] items-center gap-1 bg-green-100 text-green-700 px-1.5 py-0.5 rounded border border-green-200 hover:bg-green-200 flex transition-colors">
+                                                    <button className="text-[10px] items-center gap-1 bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded border border-emerald-200 hover:bg-emerald-200 flex transition-colors">
                                                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                                                         </svg>
@@ -442,9 +538,12 @@ const SummaryView: React.FC<{
                                         </div>
                                     </td>
                                     <td className="px-4 py-4 font-mono">{row.presencia.toFixed(2)} h</td>
-                                    <td className="px-4 py-4 font-mono text-blue-600">{row.horasJustificadas.toFixed(2)} h</td>
+                                    <td className="px-4 py-4">
+                                        <JustifiedCell row={row} startDate={startDate} endDate={endDate} />
+                                    </td>
                                     <td className="px-4 py-4 font-mono font-bold">{row.horasTotalesConJustificacion.toFixed(2)} h</td>
                                     <td className="px-4 py-4 font-mono text-orange-600">{row.horasExceso.toFixed(2)} h</td>
+                                    <td className="px-4 py-4 font-mono text-purple-600">{row.festivas ? row.festivas.toFixed(2) : '0.00'} h</td>
                                     <td className="px-4 py-4">{`${row.numTAJ} / ${row.hTAJ.toFixed(2)}`}</td>
                                     {
                                         isLongRange && (
@@ -523,9 +622,10 @@ const HrDataTable: React.FC<HrDataTableProps> = ({
     startDate,
     endDate,
     companyHolidays,
-    isLongRange
+    isLongRange,
+    flexibleEmployeeIds
 }) => {
-    return <SummaryView data={data} rawData={rawData} onReviewGaps={onReviewGaps} onManualIncident={onManualIncident} onExport={onExport} justifiedIncidentKeys={justifiedIncidentKeys} startDate={startDate} endDate={endDate} companyHolidays={companyHolidays} isLongRange={isLongRange} />;
+    return <SummaryView data={data} rawData={rawData} onReviewGaps={onReviewGaps} onManualIncident={onManualIncident} onExport={onExport} justifiedIncidentKeys={justifiedIncidentKeys} startDate={startDate} endDate={endDate} companyHolidays={companyHolidays} isLongRange={isLongRange} flexibleEmployeeIds={flexibleEmployeeIds} />;
 };
 
 export default memo(HrDataTable);

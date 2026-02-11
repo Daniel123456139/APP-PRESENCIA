@@ -77,7 +77,7 @@ const EmployeeProfilePanel: React.FC = () => {
                 <div className="bg-white rounded-lg shadow p-8 text-center">
                     <div className="text-6xl mb-4">⚠️</div>
                     <h3 className="text-xl font-bold text-red-600 mb-2">Error al Cargar Empleados</h3>
-                    <p className="text-gray-600">{allError.message}</p>
+                    <p className="text-gray-600">{allError}</p>
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

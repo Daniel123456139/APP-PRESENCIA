@@ -45,10 +45,10 @@ const AusenciasTable: React.FC<AusenciasTableProps> = ({
 
 
     return (
-        <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-red-100 mt-8 mb-8">
+        <div className="bg-white/90 p-5 sm:p-6 rounded-2xl shadow-lg border border-red-100 mt-8 mb-8">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-4 gap-4">
                 <div>
-                    <h3 className="text-xl font-bold text-red-700 flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-red-700 flex items-center gap-2 uppercase tracking-wider">
                         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
@@ -56,11 +56,15 @@ const AusenciasTable: React.FC<AusenciasTableProps> = ({
                     </h3>
                     <p className="text-sm text-slate-500 mt-1">
                         Empleados activos que no han registrado presencia en el periodo seleccionado.
+                        <span className="block text-xs text-red-600 font-semibold mt-1">
+                            ⚠️ NO incluye empleados con bajas médicas ni vacaciones grabadas.
+                        </span>
                     </p>
+
                 </div>
                 <button
                     onClick={handleExport}
-                    className="px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors text-sm font-semibold flex items-center gap-2"
+                    className="px-4 py-2 bg-white text-red-700 rounded-lg border border-red-200 hover:bg-red-50 transition-colors text-sm font-semibold flex items-center gap-2 shadow-sm"
                 >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0l-4 4m4-4v12" />
@@ -69,9 +73,9 @@ const AusenciasTable: React.FC<AusenciasTableProps> = ({
                 </button>
             </div>
 
-            <div className="overflow-x-auto overflow-y-auto max-h-[400px] scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent border rounded-lg">
+            <div className="overflow-x-auto overflow-y-auto max-h-[400px] scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent border border-red-100 rounded-xl">
                 <table className="w-full text-sm text-left text-slate-500">
-                    <thead className="bg-red-50 text-red-800 uppercase font-bold text-xs">
+                    <thead className="bg-gradient-to-r from-red-50 to-rose-50 text-red-800 uppercase font-bold text-xs">
                         <tr>
                             <th className="px-4 py-3 rounded-tl-lg">ID</th>
                             <th className="px-4 py-3">Nombre</th>

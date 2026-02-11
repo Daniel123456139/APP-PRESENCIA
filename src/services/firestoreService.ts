@@ -5,7 +5,10 @@ import {
     deleteDoc,
     doc,
     setDoc,
-    serverTimestamp
+    serverTimestamp,
+    query,
+    where,
+    getDocs
 } from 'firebase/firestore';
 import { getFirebaseDb } from '../firebaseConfig';
 import { SickLeave } from '../hooks/useFirestoreSync';
@@ -154,6 +157,7 @@ export async function updateEmployeeTurno(
             updatedAt: serverTimestamp(),
             updatedBy: 'sistema-presencia'
         });
+
         logger.success(`Turno habitual actualizado: ${employeeId} → ${turno}`);
     } catch (error) {
         logger.error('❌ Error actualizando turno:', error);
@@ -174,5 +178,85 @@ export async function updateEmployeeLastPunch(employeeId: string): Promise<void>
         });
     } catch (error) {
         logger.error('❌ Error actualizando último fichaje:', error);
+    }
+}
+
+// ===== SYNTHETIC PUNCHES (PERSISTENCE) =====
+
+export interface SyntheticPunchParams {
+    employeeId: string;
+    date: string; // YYYY-MM-DD
+    time: string; // HH:mm:ss
+    reasonId: number | null;
+    reasonDesc: string;
+    direction: 'Entrada' | 'Salida'; // Mandatory for reconstruction
+}
+
+/**
+ * Registra un fichaje sintético (GeneradoPorApp) en Firestore
+ * Se usa para persistir el flag 'GeneradoPorApp' ya que la API ERP no admite campos custom.
+ */
+export async function logSyntheticPunch(punch: SyntheticPunchParams): Promise<void> {
+    try {
+        const db = getDb();
+        // Normalización de Clave: IDOperario_YYYY-MM-DD_HH:mm
+        // Cortamos los segundos para evitar discrepancias menores, o normalizamos a 00 si es necesario.
+        // Asumimos que la hora viene en HH:mm:ss o HH:mm.
+        // Para mayor seguridad con la API, normalizamos a HH:mm
+        const timeKey = punch.time.substring(0, 5);
+        const docId = `${punch.employeeId}_${punch.date}_${timeKey}`;
+
+        const docRef = doc(db, 'APP_GENERATED_PUNCHES', docId);
+
+        await setDoc(docRef, {
+            ...punch,
+            originalTime: punch.time,
+            timeKey: timeKey,
+            createdAt: serverTimestamp(),
+            type: 'synthetic_punch',
+            direction: punch.direction
+        });
+
+        logger.success(`Fichaje sintético registrado: ${docId}`);
+    } catch (error) {
+        logger.error('❌ Error registrando fichaje sintético:', error);
+        // No lanzamos error para no bloquear el flujo principal, pero logueamos.
+    }
+}
+
+/**
+ * Recupera los fichajes sintéticos para un rango de fechas.
+ * Retorna un Set de claves (IDOperario_YYYY-MM-DD_HH:mm) para búsqueda rápida O(1).
+ */
+export async function fetchSyntheticPunches(
+    startDate: string,
+    endDate: string
+): Promise<Map<string, SyntheticPunchParams>> {
+    try {
+        const db = getDb();
+        const q = query(
+            collection(db, 'APP_GENERATED_PUNCHES'),
+            where('date', '>=', startDate),
+            where('date', '<=', endDate)
+        );
+
+        const snapshot = await getDocs(q);
+        const syntheticPunches = new Map<string, SyntheticPunchParams>();
+
+        snapshot.forEach(doc => {
+            const data = doc.data() as SyntheticPunchParams & { timeKey?: string };
+            if (data.employeeId && data.date) {
+                // Use stored timeKey or derive it
+                const timeKey = data.timeKey || data.time.substring(0, 5);
+                const key = `${data.employeeId}_${data.date}_${timeKey}`;
+                syntheticPunches.set(key, data);
+            }
+        });
+
+        logger.info(`Recuperados ${syntheticPunches.size} fichajes sintéticos.`);
+        return syntheticPunches;
+    } catch (error) {
+        logger.error('❌ Error recuperando fichajes sintéticos:', error);
+        return new Map(); // Retornar vacío en caso de error para no romper la app
     }
 }

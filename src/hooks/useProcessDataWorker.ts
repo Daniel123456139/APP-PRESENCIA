@@ -13,13 +13,24 @@ export function useProcessDataWorker(
     rawData: RawDataRow[],
     allUsers: User[],
     analysisRange?: { start: Date, end: Date },
-    holidays?: Set<string>
+    holidays?: Set<string>,
+    dataVersion?: number,
+    employeeCalendars?: Record<number, Record<string, number>>,
+    calendarsKey?: string,
+    usersKey?: string
 ) {
     const [result, setResult] = useState<ProcessedDataRow[]>([]);
     const [status, setStatus] = useState<'idle' | 'processing' | 'error' | 'success'>('idle');
+    const [error, setError] = useState<string | null>(null);
     const workerRef = useRef<Worker | null>(null);
     const prevDataLengthRef = useRef<number>(0);
-    const isProcessingRef = useRef<boolean>(false);
+    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const processingTokenRef = useRef<number>(0);
+    const WORKER_TIMEOUT_MS = 15000;
+
+    // Safety Refs
+    const runSafeCounterRef = useRef<number>(0);
+    const lastRunTimeRef = useRef<number>(0);
 
     // Memoize holidays array to prevent unnecessary re-renders
     const holidaysArray = useMemo(() => {
@@ -30,82 +41,197 @@ export function useProcessDataWorker(
     const analysisRangeKey = useMemo(() => {
         if (!analysisRange) return '';
         return `${analysisRange.start?.getTime()}-${analysisRange.end?.getTime()}`;
-    }, [analysisRange]);
+    }, [analysisRange?.start?.getTime(), analysisRange?.end?.getTime()]);
+
+    // Deep compare employeeCalendars
+    const calendarsJson = useMemo(() => {
+        return employeeCalendars ? JSON.stringify(employeeCalendars) : '';
+    }, [employeeCalendars]);
 
     useEffect(() => {
-        // Si no hay datos, limpiamos y salimos (pero solo si había datos antes)
+        // Si no hay datos, limpiamos
         if (!rawData || rawData.length === 0) {
-            if (prevDataLengthRef.current > 0 || result.length > 0) {
+            if (result.length > 0) {
                 setResult([]);
                 setStatus('idle');
-                prevDataLengthRef.current = 0;
+                setError(null);
             }
             return;
         }
 
-        // Evitar procesar si ya estamos procesando
-        if (isProcessingRef.current) {
-            return;
-        }
+        // Increment token for this run
+        processingTokenRef.current += 1;
+        const CurrentToken = processingTokenRef.current;
 
-        isProcessingRef.current = true;
-        prevDataLengthRef.current = rawData.length;
         setStatus('processing');
+        setError(null);
 
-        // Función de respaldo en hilo principal
-        const fallbackToMainThread = () => {
+        const isSmallVolume = (): boolean => {
+            if (rawData.length < 2000) return true;
+            if (analysisRange) {
+                const startMs = analysisRange.start?.getTime?.() || 0;
+                const endMs = analysisRange.end?.getTime?.() || 0;
+                const dayMs = 24 * 60 * 60 * 1000;
+                const rangeDays = Math.floor(Math.abs(endMs - startMs) / dayMs) + 1;
+                return rangeDays <= 2;
+            }
+            return false;
+        };
+
+        // Función de respaldo sincrónico
+        const runSynchronousFallback = () => {
+            if (CurrentToken !== processingTokenRef.current) return;
+            if (!isSmallVolume()) {
+                if (CurrentToken === processingTokenRef.current) {
+                    setStatus('error');
+                    setError('El procesamiento ha tardado demasiado. Reduce el rango de fechas o activa modo rendimiento.');
+                }
+                return;
+            }
             try {
-                const synchronousResult = processData(rawData, allUsers, undefined, analysisRange, holidays);
-                setResult(synchronousResult);
-                setStatus('success');
+                // Build map
+                let calendarMap: Map<number, Map<string, number>> | undefined;
+                if (employeeCalendars && typeof employeeCalendars === 'object') {
+                    calendarMap = new Map();
+                    Object.entries(employeeCalendars).forEach(([empId, dateObj]) => {
+                        calendarMap!.set(Number(empId), new Map(Object.entries(dateObj)));
+                    });
+                }
+
+                // Process
+                const syncRes = processData(rawData, allUsers, undefined, analysisRange, holidays, calendarMap);
+
+                // Only set if still relevant
+                if (CurrentToken === processingTokenRef.current) {
+                    setResult(syncRes);
+                    setStatus('success');
+                    setError(null);
+                }
             } catch (err) {
-                console.error("Error también en el hilo principal:", err);
-                setStatus('error');
-            } finally {
-                isProcessingRef.current = false;
+                console.error("Worker/Fallback Error:", err);
+                if (CurrentToken === processingTokenRef.current) {
+                    setStatus('error');
+                    setError('El procesamiento ha fallado. Reduce el rango de fechas o activa modo rendimiento.');
+                }
             }
         };
 
-        try {
-            // Inicializar Worker
-            if (!workerRef.current) {
-                workerRef.current = new Worker(new URL('../workers/processData.worker.ts', import.meta.url), { type: 'module' });
-            }
-
-            const worker = workerRef.current;
-
-            worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
-                isProcessingRef.current = false;
-                if (e.data.success && e.data.data) {
-                    setResult(e.data.data);
-                    setStatus('success');
-                } else {
-                    console.warn("Worker reportó error, usando fallback:", e.data.error);
-                    fallbackToMainThread();
+        // Attempt Worker
+        const runWorker = () => {
+            try {
+                if (!workerRef.current) {
+                    workerRef.current = new Worker(new URL('../workers/processData.worker.ts', import.meta.url), { type: 'module' });
                 }
-            };
 
-            worker.onerror = (err) => {
-                isProcessingRef.current = false;
-                console.error("Error crítico en Worker, usando fallback:", err);
-                fallbackToMainThread();
-            };
+                const worker = workerRef.current;
+                let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
-            // Enviar datos al worker
-            worker.postMessage({ rawData, allUsers, analysisRange, holidays: holidaysArray });
+                const cleanupWorker = (terminate: boolean) => {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                        timeoutId = null;
+                    }
+                    if (worker) {
+                        worker.onmessage = null;
+                        worker.onerror = null;
+                        if (terminate) {
+                            worker.terminate();
+                            workerRef.current = null;
+                        }
+                    }
+                };
 
-        } catch (e) {
-            console.warn("No se pudo iniciar el Worker (posiblemente entorno no compatible), usando fallback.", e);
-            fallbackToMainThread();
+                const handleMessage = (e: MessageEvent<WorkerResponse>) => {
+                    if (CurrentToken !== processingTokenRef.current) return;
+                    cleanupWorker(false);
+
+                    if (e.data?.success) {
+                        setResult(e.data.data || []);
+                        setStatus('success');
+                        setError(null);
+                    } else {
+                        cleanupWorker(true);
+                        console.error("Worker Error:", e.data?.error);
+                        runSynchronousFallback();
+                    }
+                };
+
+                const handleError = (err: Event) => {
+                    if (CurrentToken !== processingTokenRef.current) return;
+                    cleanupWorker(true);
+                    console.error("Worker Error:", err);
+                    runSynchronousFallback();
+                };
+
+                worker.onmessage = handleMessage;
+                worker.onerror = handleError;
+
+                timeoutId = setTimeout(() => {
+                    if (CurrentToken !== processingTokenRef.current) return;
+                    console.warn("Worker timeout, falling back to main thread.");
+                    cleanupWorker(true);
+                    runSynchronousFallback();
+                }, WORKER_TIMEOUT_MS);
+
+                worker.postMessage({
+                    rawData,
+                    allUsers,
+                    employeeId: undefined,
+                    analysisRange,
+                    holidays: holidaysArray,
+                    employeeCalendars
+                });
+            } catch (e) {
+                console.error("Worker init error:", e);
+                runSynchronousFallback();
+            }
+        };
+
+
+        // Safety: Prevent Infinite Loops
+        const now = Date.now();
+        const timeSinceLastRun = now - (lastRunTimeRef.current || 0);
+        lastRunTimeRef.current = now;
+
+        if (timeSinceLastRun < 1000) {
+            runSafeCounterRef.current += 1;
+        } else {
+            runSafeCounterRef.current = 1;
         }
+
+        if (runSafeCounterRef.current > 5) {
+            console.error("🚨 [useProcessDataWorker] Infinite Loop Detected! Stopping worker execution temporarily.");
+            setStatus('error');
+            setError('El procesamiento ha fallado. Reduce el rango de fechas o activa modo rendimiento.');
+            return;
+        }
+
+        /* console.log(`⚙️ [useProcessDataWorker] Triggered by:`, {
+             dataLen: rawData?.length,
+             rangeKey: analysisRangeKey,
+             holidaysKey: holidaysArray?.length,
+             calendarsKey,
+             usersKeyLen: usersKey?.length
+        }); */
+
+        // Small debounce to avoid clogging on rapid changes, but keeping it reactive
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        timeoutRef.current = setTimeout(runWorker, 100);
 
         return () => {
-            // Cleanup - marcar que no estamos procesando
-            isProcessingRef.current = false;
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
         };
 
-        // Usamos rawData.length y analysisRangeKey para evitar re-triggers innecesarios
-    }, [rawData.length, allUsers.length, analysisRangeKey, holidaysArray.length]);
+    }, [rawData, allUsers, analysisRangeKey, holidaysArray, dataVersion, calendarsKey, usersKey, calendarsJson]);
 
-    return { result, status };
+    useEffect(() => {
+        return () => {
+            if (workerRef.current) {
+                workerRef.current.terminate();
+                workerRef.current = null;
+            }
+        };
+    }, []);
+
+    return { result, status, error };
 }

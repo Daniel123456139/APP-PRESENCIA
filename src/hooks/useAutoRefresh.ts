@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchFichajes } from '../services/apiService';
+import { fetchFichajes, fetchFichajesBatched } from '../services/apiService';
 import { RawDataRow } from '../types';
 
 interface AutoRefreshOptions {
@@ -29,7 +29,10 @@ export const useAutoRefresh = (
 
         try {
             // Reutilizamos fetchFichajes del servicio existente
-            const data = await fetchFichajes(startDate, endDate);
+            const rangeDays = Math.ceil(Math.abs(new Date(`${endDate}T23:59:59`).getTime() - new Date(`${startDate}T00:00:00`).getTime()) / (1000 * 60 * 60 * 24));
+            const data = rangeDays > 7
+                ? await fetchFichajesBatched(startDate, endDate, '', '00:00', '23:59')
+                : await fetchFichajes(startDate, endDate, '', '00:00', '23:59');
             onDataFetched(data);
             setLastUpdated(Date.now());
             console.log('✅ [AutoRefresh] Sincronización completada.');

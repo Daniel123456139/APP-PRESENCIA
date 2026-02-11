@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
-import { RawDataRow, ProcessedDataRow } from '../../types';
+import { RawDataRow, ProcessedDataRow, User } from '../../types';
 import { processData } from '../../services/dataProcessor';
 import { DEPARTMENTS } from '../../constants';
 import BarChart from '../shared/charts/BarChart';
@@ -8,6 +8,7 @@ import DoughnutChart from '../shared/charts/DoughnutChart';
 import KpiCard from '../shared/charts/KpiCard';
 import { SvgIcon } from '../shared/Nav';
 import { toISODateLocal, parseLocalDateTime, parseISOToLocalDate } from '../../utils/localDate';
+import { normalizeDateKey, extractTimeHHMMSS } from '../../utils/datetime';
 
 const CHART_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#6366F1', '#F97316'];
 
@@ -32,8 +33,12 @@ interface AggregatedStats {
     byDept: Map<string, { excesoJornada1: number, numRetrasos: number, employeeCount: Set<number> }>;
 }
 
+interface VisualDashboardProps {
+    erpData: RawDataRow[];
+    users: User[];
+}
 
-const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
+const VisualDashboard: React.FC<VisualDashboardProps> = ({ erpData, users }) => {
     const today = new Date();
     const firstDayOfMonth = toISODateLocal(new Date(today.getFullYear(), today.getMonth(), 1));
     const lastDayOfMonth = toISODateLocal(new Date(today.getFullYear(), today.getMonth() + 1, 0));
@@ -47,15 +52,15 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
         if (selectedDepartment !== 'all') {
             data = data.filter(row => row.DescDepartamento === selectedDepartment);
         }
-        if (fechaInicio) data = data.filter(row => row.Fecha >= fechaInicio);
-        if (fechaFin) data = data.filter(row => row.Fecha <= fechaFin);
+        if (fechaInicio) data = data.filter(row => normalizeDateKey(row.Fecha) >= fechaInicio);
+        if (fechaFin) data = data.filter(row => normalizeDateKey(row.Fecha) <= fechaFin);
         return data;
     }, [selectedDepartment, fechaInicio, fechaFin, erpData]);
 
     const processedData: ProcessedDataRow[] = useMemo(() => {
         if (!filteredRawData.length) return [];
-        return processData(filteredRawData);
-    }, [filteredRawData]);
+        return processData(filteredRawData, users);
+    }, [filteredRawData, users]);
 
     const handleClearFilters = useCallback(() => {
         setSelectedDepartment('all');
@@ -110,11 +115,13 @@ const VisualDashboard: React.FC<{ erpData: RawDataRow[] }> = ({ erpData }) => {
         const hoursByDay = new Map<string, number>();
 
         const dailyRecords = filteredRawData.reduce<Record<string, { ins: number[], outs: number[] }>>((acc, row) => {
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(row.Fecha) || !/^\d{2}:\d{2}:\d{2}$/.test(row.Hora)) return acc;
-            const key = `${row.IDOperario}-${row.Fecha}`;
+            const dateKey = normalizeDateKey(row.Fecha);
+            const timeKey = extractTimeHHMMSS(row.Hora);
+            if (!dateKey || !timeKey) return acc;
+            const key = `${row.IDOperario}-${dateKey}`;
             if (!acc[key]) acc[key] = { ins: [], outs: [] };
 
-            const dateTime = parseLocalDateTime(row.Fecha, row.Hora).getTime();
+            const dateTime = parseLocalDateTime(dateKey, timeKey).getTime();
 
             if (row.Entrada === 1) acc[key].ins.push(dateTime);
             else if (row.MotivoAusencia === 1) acc[key].outs.push(dateTime);

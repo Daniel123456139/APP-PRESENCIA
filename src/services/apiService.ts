@@ -1,5 +1,6 @@
 
 import { RawDataRow } from '../types';
+import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
 import { getApiBaseUrl, getErpUsername } from '../config/apiConfig';
 
 // Convierte YYYY-MM-DD a DD/MM/YYYY para compatibilidad estricta con ERP
@@ -9,6 +10,13 @@ const formatDateForApi = (dateStr: string): string => {
         const [year, month, day] = dateStr.split('-');
         return `${day}/${month}/${year}`;
     }
+    return dateStr;
+};
+
+const normalizeDateInput = (dateStr: string): string => {
+    if (!dateStr) return '';
+    if (dateStr.includes('T')) return dateStr.split('T')[0];
+    if (dateStr.includes(' ')) return dateStr.split(' ')[0];
     return dateStr;
 };
 
@@ -45,6 +53,19 @@ const formatApiTimeToApp = (timeStr: string): string => {
 
     if (cleanTime.length > 8) return cleanTime.substring(0, 8);
     if (cleanTime.length === 5) return `${cleanTime}:00`;
+    return cleanTime;
+};
+
+const formatTimeForApi = (timeStr: string): string => {
+    if (!timeStr) return '';
+    let cleanTime = timeStr;
+    if (cleanTime.includes('T')) cleanTime = cleanTime.split('T')[1];
+    else if (cleanTime.includes(' ')) {
+        const parts = cleanTime.split(' ');
+        cleanTime = parts.length > 1 && parts[1].includes(':') ? parts[1] : cleanTime;
+    }
+    if (cleanTime.length === 5) return `${cleanTime}:00`;
+    if (cleanTime.length >= 8) return cleanTime.substring(0, 8);
     return cleanTime;
 };
 
@@ -89,29 +110,114 @@ export const fetchFichajes = async (
     try {
         const baseUrl = getApiBaseUrl();
         // CONTRATO A: POST /fichajes/getFichajes
-        const payload = {
-            fechaDesde: formatDateForApi(startDate),
-            fechaHasta: formatDateForApi(endDate),
-            idOperario: idOperario,
-            ...(horaInicio && { horaInicio }),
-            ...(horaFin && { horaFin })
-        };
+        const cleanStart = normalizeDateInput(startDate);
+        const cleanEnd = normalizeDateInput(endDate);
+        if (!cleanStart || !cleanEnd) {
+            return [];
+        }
+        const dateVariants = [
+            {
+                fechaDesde: formatDateForApi(cleanStart),
+                fechaHasta: formatDateForApi(cleanEnd)
+            }
+        ];
 
-
-        const response = await fetchWithTimeout(`${baseUrl}/fichajes/getFichajes`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(payload)
-        }, 30000);
-
-        if (!response.ok) {
-            throw new Error(`Error del servidor (${response.status})`);
+        const idVariants: Array<{ idOperario?: string | number }> = [];
+        if (idOperario) {
+            const cleanId = idOperario.toString().replace(/\D/g, '');
+            idVariants.push({ idOperario: cleanId.padStart(3, '0') });
+            if (cleanId !== idOperario) {
+                idVariants.push({ idOperario });
+            }
+        } else {
+            idVariants.push({});
+            idVariants.push({ idOperario: 0 });
+            idVariants.push({ idOperario: '0' });
+            idVariants.push({ idOperario: '000' });
         }
 
-        const data = await response.json();
+        const timeStart = formatTimeForApi(horaInicio);
+        const timeEnd = formatTimeForApi(horaFin);
+        const timeVariants: Array<{ horaInicio?: string; horaFin?: string }> = [];
+
+        if (timeStart || timeEnd) {
+            timeVariants.push({
+                ...(timeStart && { horaInicio: timeStart }),
+                ...(timeEnd && { horaFin: timeEnd })
+            });
+
+            if (horaFin && horaFin.startsWith('23:59') && timeEnd.endsWith(':00')) {
+                timeVariants.push({
+                    ...(timeStart && { horaInicio: timeStart }),
+                    horaFin: '23:59:59'
+                });
+            }
+
+            const shortStart = timeStart ? timeStart.substring(0, 5) : '';
+            const shortEnd = timeEnd ? timeEnd.substring(0, 5) : '';
+            if (shortStart !== timeStart || shortEnd !== timeEnd) {
+                timeVariants.push({
+                    ...(shortStart && { horaInicio: shortStart }),
+                    ...(shortEnd && { horaFin: shortEnd })
+                });
+            }
+
+            timeVariants.push({});
+        } else {
+            timeVariants.push({});
+        }
+
+        let data: any = null;
+        let lastStatus = 0;
+
+        for (let d = 0; d < dateVariants.length; d++) {
+            for (let id = 0; id < idVariants.length; id++) {
+                for (let i = 0; i < timeVariants.length; i++) {
+                    const payload: any = {
+                        ...dateVariants[d],
+                        ...idVariants[id],
+                        ...timeVariants[i]
+                    };
+                    if (!payload.horaInicio) delete payload.horaInicio;
+                    if (!payload.horaFin) delete payload.horaFin;
+
+                    const response = await fetchWithTimeout(`${baseUrl}/fichajes/getFichajes`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        body: JSON.stringify(payload)
+                    }, 30000);
+
+                    if (!response.ok) {
+                        lastStatus = response.status;
+                        if (response.status === 422) {
+                            if (d < dateVariants.length - 1 || id < idVariants.length - 1 || i < timeVariants.length - 1) {
+                                continue;
+                            }
+                            const errorText = await response.text();
+                            throw new Error(`Error del servidor (${response.status}): ${errorText.substring(0, 200)}`);
+                        }
+                        throw new Error(`Error del servidor (${response.status})`);
+                    }
+
+                    data = await response.json();
+                    if (Array.isArray(data) && data.length === 0) {
+                        if (d < dateVariants.length - 1 || id < idVariants.length - 1 || i < timeVariants.length - 1) {
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                if (data) break;
+            }
+            if (data) break;
+        }
+
+        if (!data) {
+            throw new Error(`Error del servidor (${lastStatus || 422})`);
+        }
 
 
         const mappedData = data.map((item: any) => ({
@@ -119,15 +225,15 @@ export const fetchFichajes = async (
             DescDepartamento: item.DescDepartamento || 'General',
             IDOperario: typeof item.IDOperario === 'string' ? parseInt(item.IDOperario, 10) : item.IDOperario,
             DescOperario: item.DescOperario || 'Desconocido',
-            Fecha: formatApiDateToApp(item.Fecha),
-            Hora: formatApiTimeToApp(item.Hora),
+            Fecha: normalizeDateKey(formatApiDateToApp(item.Fecha)),
+            Hora: extractTimeHHMMSS(formatApiTimeToApp(item.Hora)),
             Entrada: (item.Entrada === true || item.Entrada === 1 || item.Entrada === '1') ? 1 : 0,
             MotivoAusencia: item.MotivoAusencia ? parseInt(item.MotivoAusencia as string, 10) : null,
             DescMotivoAusencia: item.DescMotivoAusencia || item.DescMotivo || '',
             Computable: (item.Computable === false || item.Computable === 0 || item.Computable === 'No') ? 'No' : 'Sí',
             IDTipoTurno: item.IDTipoTurno ? String(item.IDTipoTurno) : null,
-            Inicio: item.Inicio || '',
-            Fin: item.Fin || '',
+            Inicio: extractTimeHHMM(item.Inicio || ''),
+            Fin: extractTimeHHMM(item.Fin || ''),
             TipoDiaEmpresa: typeof item.TipoDiaEmpresa === 'number' ? item.TipoDiaEmpresa : (parseInt(item.TipoDiaEmpresa as string, 10) || 0),
             TurnoTexto: item.DescTipoTurno || item.TurnoTexto || ''
         }));
@@ -146,6 +252,95 @@ export const fetchFichajes = async (
         }
         throw error;
     }
+};
+
+const toIsoDate = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const addDays = (date: Date, days: number): Date => {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+};
+
+const diffDays = (start: string, end: string): number => {
+    try {
+        const s = new Date(`${start}T00:00:00`);
+        const e = new Date(`${end}T23:59:59`);
+        const diffMs = Math.abs(e.getTime() - s.getTime());
+        return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    } catch {
+        return 0;
+    }
+};
+
+export const fetchFichajesBatched = async (
+    startDate: string,
+    endDate: string,
+    idOperario: string = '',
+    horaInicio: string = '',
+    horaFin: string = '',
+    batchDays = 5 // Reduced to 5 for safer chunks
+): Promise<RawDataRow[]> => {
+    if (!startDate || !endDate) return [];
+
+    // Helper to calculate days diff
+    const getDaysDiff = (s: string, e: string) => {
+        const d1 = new Date(`${s}T00:00:00`);
+        const d2 = new Date(`${e}T23:59:59`);
+        return Math.ceil(Math.abs(d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
+    };
+
+    const totalDays = getDaysDiff(startDate, endDate);
+
+    // Si es un rango pequeño, llamada normal
+    if (totalDays <= batchDays) {
+        return fetchFichajes(startDate, endDate, idOperario, horaInicio, horaFin);
+    }
+
+    // Generar chunks
+    const chunks: { start: string; end: string }[] = [];
+    let cursor = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T23:59:59`);
+
+    while (cursor <= end) {
+        const chunkStart = toIsoDate(cursor);
+        let chunkEndObj = addDays(cursor, batchDays - 1);
+        if (chunkEndObj > end) chunkEndObj = end;
+        const chunkEnd = toIsoDate(chunkEndObj);
+
+        chunks.push({ start: chunkStart, end: chunkEnd });
+        cursor = addDays(chunkEndObj, 1);
+    }
+
+    const results: RawDataRow[] = [];
+    const CONCURRENCY_LIMIT = 3; // Max parallel requests
+
+    // Execute chunks with throttling
+    for (let i = 0; i < chunks.length; i += CONCURRENCY_LIMIT) {
+        const batch = chunks.slice(i, i + CONCURRENCY_LIMIT);
+        const promises = batch.map(chunk =>
+            fetchFichajes(chunk.start, chunk.end, idOperario, horaInicio, horaFin)
+                .catch(err => {
+                    console.error(`Error fetching batch ${chunk.start}-${chunk.end}:`, err);
+                    return [] as RawDataRow[]; // Fail gracefully for that chunk
+                })
+        );
+
+        const batchResults = await Promise.all(promises);
+        batchResults.forEach(r => results.push(...r));
+
+        // Small delay between super-batches to be nice to the server
+        if (i + CONCURRENCY_LIMIT < chunks.length) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+        }
+    }
+
+    return results;
 };
 
 export const insertFichaje = async (fichaje: Partial<RawDataRow>, userName: string = "AppUser") => {

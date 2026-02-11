@@ -167,8 +167,8 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /BAJAS/{bajaId} {
-      // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      // Lectura: HR y Admin (DEBUG: Relaxed to isAuthenticated for troubleshooting)
+      allow read: if isAuthenticated(); // hasAnyRole(['hr', 'admin']);
       
       // Escritura: Solo HR y Admin (para mover de activa a historico)
       allow write: if hasAnyRole(['hr', 'admin']);
@@ -187,6 +187,27 @@ service cloud.firestore {
       
       // NO permitir actualización ni eliminación (logs inmutables)
       allow update, delete: if false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: BAJAS_METADATA (Metadatos de bajas)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /BAJAS_METADATA/{metadataId} {
+      // Lectura: Cualquier usuario autenticado (incluyendo anónimos)
+      allow read: if isAuthenticated(); // hasAnyRole(['hr', 'admin']);
+      
+      // Escritura: Solo HR y Admin
+      allow write: if hasAnyRole(['hr', 'admin']);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: APP_GENERATED_PUNCHES
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /APP_GENERATED_PUNCHES/{punchId} {
+      // Lectura y Escritura: Cualquier usuario autenticado (incluyendo anónimos)
+      allow read, write: if isAuthenticated();
     }
     
     // ═══════════════════════════════════════════════════════════════

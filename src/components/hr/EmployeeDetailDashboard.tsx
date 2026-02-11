@@ -100,8 +100,7 @@ const EmployeeDetailDashboard: React.FC<EmployeeDetailDashboardProps> = ({
                 const processedResult = processData(
                     periodRaw,
                     [tempUser],
-                    shifts,
-                    undefined,
+                    employeeId,
                     analysisRange,
                     companyNonWorkingSet
                 );
@@ -124,7 +123,7 @@ const EmployeeDetailDashboard: React.FC<EmployeeDetailDashboardProps> = ({
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         return shifts
-            .filter(s => s.employeeId === employeeId && new Date(s.date) >= today)
+            .filter(s => s.operarioId === employeeId && new Date(s.date) >= today)
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
             .slice(0, 7);
     }, [shifts, employeeId]);
@@ -167,11 +166,15 @@ const EmployeeDetailDashboard: React.FC<EmployeeDetailDashboardProps> = ({
                         const dayNum = date.getDate();
                         const bgColor = isWeekend ? 'bg-rose-100 text-rose-800' : 'bg-pink-100 text-pink-800';
 
+                        // Import SHIFT_TYPES to use label, or hardcode/map
+                        // Since I can't easily import inside replace, I'll use simple mapping or just code
+                        const shiftLabel = shift ? shift.shiftCode : (isWeekend ? 'Libre' : 'Laborable');
+
                         return (
                             <div key={idx} className={`flex flex-col items-center justify-center min-w-[80px] h-24 rounded-xl ${bgColor}`}>
                                 <span className="text-xs font-bold mb-1">{dayName}</span>
                                 <span className="text-2xl font-black mb-1">{dayNum}</span>
-                                <span className="text-[10px] font-medium opacity-80">{shift ? shift.shiftType : (isWeekend ? 'Libre' : 'Laborable')}</span>
+                                <span className="text-[10px] font-medium opacity-80">{shiftLabel}</span>
                             </div>
                         );
                     })}

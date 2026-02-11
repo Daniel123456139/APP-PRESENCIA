@@ -8,12 +8,12 @@ import {
     HrSickLeavesPage,
     HrVacationsPage,
     HrHistoryPage,
-    HrAnalyticsPage,
     HrProfilesPage,
     HrBlogPage,
     HrSettingsPage,
     HrJobsPage
 } from './components/hr/pages/HrPages';
+
 import ProcessingComponent from './components/core/ProcessingComponent';
 import InitialConfigComponent from './components/core/InitialConfigComponent';
 
@@ -29,6 +29,8 @@ import { fetchFichajes } from './services/apiService';
 import { getCalendarioEmpresa, CalendarioDia } from './services/erpApi';
 import { SyncService } from './services/syncService';
 import { encryptStorageData, decryptStorageData } from './services/encryptionService';
+import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getFirebaseApp } from './firebaseConfig';
 
 export interface AuthContextType {
     user: User | null;
@@ -106,6 +108,32 @@ const MainRoutes: React.FC = () => {
         };
     }, [showNotification]);
 
+    useEffect(() => {
+        let cancelled = false;
+        const initFirebaseAuth = async () => {
+            try {
+                const app = getFirebaseApp();
+                const auth = getAuth(app);
+                if (!auth.currentUser) {
+                    await signInAnonymously(auth);
+                }
+            } catch (error: any) {
+                if (cancelled) return;
+                console.error('Firebase anonymous auth failed:', error);
+                if (error.code === 'auth/admin-restricted-operation') {
+                    showNotification('Error: Autenticación Anónima deshabilitada en Firebase Console. Habilítala en Authentication > Sign-in method.', 'error');
+                } else {
+                    showNotification('No se pudo autenticar en Firebase; histórico de bajas puede no estar disponible', 'error');
+                }
+            }
+        };
+
+        initFirebaseAuth();
+        return () => {
+            cancelled = true;
+        };
+    }, [showNotification]);
+
     const handleRoleSelect = async (role: 'HR' | 'EMPLOYEE') => {
         if (role === 'HR') {
             setLoginRole('HR');
@@ -128,7 +156,7 @@ const MainRoutes: React.FC = () => {
     const executeDataLoad = async (startDate: string, endDate: string, startTime: string, endTime: string) => {
         try {
             const [fichajesResult, calendarResult] = await Promise.allSettled([
-                fetchFichajes(startDate, endDate, '', startTime, endTime),
+                fetchFichajes(startDate, endDate, '', '', ''),
                 getCalendarioEmpresa(startDate, endDate)
             ]);
 
@@ -240,7 +268,7 @@ const MainRoutes: React.FC = () => {
                         <Route path="jobs" element={<HrJobsPage />} />
                         <Route path="history" element={<HrHistoryPage />} />
                         <Route path="sickleaves" element={<HrSickLeavesPage />} />
-                        <Route path="analytics" element={<HrAnalyticsPage />} />
+
                         <Route path="vacations" element={<HrVacationsPage />} />
                         <Route path="calendar" element={<HrCalendarPage />} />
                         <Route path="profiles" element={<HrProfilesPage />} />

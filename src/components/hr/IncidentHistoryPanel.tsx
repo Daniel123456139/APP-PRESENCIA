@@ -232,7 +232,7 @@ const IncidentHistoryPanel: React.FC<IncidentHistoryPanelProps> = ({ incidentLog
                                                     </td>
                                                     <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
                                                         <button
-                                                            onClick={() => onDelete && onDelete(entry.id)}
+                                                            onClick={() => onDelete && onDelete(String(entry.id))}
                                                             className="text-red-600 hover:text-red-900 transition-colors p-1 rounded hover:bg-red-50"
                                                             title="Eliminar registro del historial"
                                                         >

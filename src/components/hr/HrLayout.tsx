@@ -7,6 +7,7 @@ import { toISODateLocal, getSmartDefaultDateRange } from '../../utils/localDate'
 import SyncStatusIndicator from '../shared/SyncStatusIndicator';
 import { IncidentManagerHandle } from './IncidentManager';
 import IncidentManager from './IncidentManager';
+import { exportUnproductivityToXlsx } from '../../services/exports/unproductivityExportService';
 
 // Icons
 import {
@@ -59,7 +60,9 @@ export interface HrLayoutContextType {
     employeeOptions: { id: number; name: string; role: Role; department: string; productivo: boolean }[];
     activeSickLeavesRaw: RawDataRow[];
     effectiveCalendarDays: CalendarioDia[];
+
     selectedEmployeeData: any;
+    employeeCalendarsByDate: Map<number, Map<string, CalendarioDia>>;
 
     // UI/Filter State
     selectedDepartment: string; setSelectedDepartment: (val: string) => void;
@@ -91,6 +94,7 @@ export interface HrLayoutContextType {
     handleOpenLateArrivals: () => void;
     handleOpenAdjustmentModal: () => void;
     handleExportResumen: () => void;
+    handleUnproductivityExport: () => void;
 
     // Refs
     incidentManagerRef: React.RefObject<IncidentManagerHandle>;
@@ -156,7 +160,8 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         turno, setTurno,
         reloadFromServer, handleExport, handleFreeHoursExport, fetchActiveSickLeaves,
         isLongRange, performanceMode, companyHolidaySet, computedDepartments,
-        departmentFilteredEmployees, shouldUseVirtualization
+
+        departmentFilteredEmployees, shouldUseVirtualization, employeeCalendarsByDate
     } = useHrPortalData({
         startDate, endDate, startTime, endTime,
         shifts: props.shifts,
@@ -221,6 +226,13 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         link.click();
     };
 
+    const handleUnproductivityExport = () => {
+        if (datasetResumen.length === 0) return;
+        const filename = `Improductividad_${startDate}_${endDate}.xlsx`;
+        const periodStr = `${startDate} a ${endDate}`;
+        exportUnproductivityToXlsx(datasetResumen, filename, periodStr);
+    };
+
     const contextValue: HrLayoutContextType = {
         startDate, setStartDate,
         endDate, setEndDate,
@@ -229,6 +241,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
 
         erpData, datasetResumen, datasetAusencias, employeeOptions,
         activeSickLeavesRaw, effectiveCalendarDays, selectedEmployeeData,
+        employeeCalendarsByDate,
 
         selectedDepartment, setSelectedDepartment,
         selectedEmployeeIds, setSelectedEmployeeIds,
@@ -246,6 +259,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         handleOpenLateArrivals,
         handleOpenAdjustmentModal,
         handleExportResumen,
+        handleUnproductivityExport,
 
         incidentManagerRef,
 
@@ -270,7 +284,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                     <NavItem to="/portal/jobs" label="Gestión de Trabajos" icon={<Briefcase size={20} />} />
                     <NavItem to="/portal/history" label="Historial Incidencias" icon={<History size={20} />} />
                     <NavItem to="/portal/sickleaves" label="Gestión de Bajas" icon={<Stethoscope size={20} />} />
-                    <NavItem to="/portal/analytics" label="Absentismo" icon={<BarChart3 size={20} />} />
+
                     <NavItem to="/portal/vacations" label="Gestión de Vacaciones" icon={<Palmtree size={20} />} />
                     <NavItem to="/portal/calendar" label="Calendario" icon={<CalendarDays size={20} />} />
                     <NavItem to="/portal/blog" label="Blog" icon={<Newspaper size={20} />} />

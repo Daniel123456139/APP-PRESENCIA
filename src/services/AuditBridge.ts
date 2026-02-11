@@ -25,8 +25,8 @@ export const AuditBridge = {
                 metadata: event.payload,
                 status: status,
                 module: 'SYNC',
-                employeeId: event.payload?.IDOperario,
-                employeeName: event.payload?.DescOperario
+                employeeId: (event.payload as any)?.IDOperario,
+                employeeName: (event.payload as any)?.DescOperario
             });
         });
     }

@@ -13,6 +13,7 @@ import { useNotification } from '../shared/NotificationContext';
 import { AuthContext } from '../../App';
 import { useErpDataState, useErpDataActions } from '../../store/erpDataStore';
 import { SickLeaveMetadataService } from '../../services/sickLeaveMetadataService';
+import { SickLeaveSyncService } from '../../services/sickLeaveSyncService';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
 import { getCalendarioOperario, Operario } from '../../services/erpApi';
 
@@ -70,6 +71,10 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
     const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
     const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
     const [pendingAction, setPendingAction] = useState<(() => Promise<void>) | null>(null);
+
+    // Sync State
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncProgress, setSyncProgress] = useState<{ current: number; total: number } | null>(null);
 
     // Helper: Is IT?
     const isSickLeave = (motivoId: number) => motivoId === 10 || motivoId === 11;
@@ -258,6 +263,47 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
         return Array.from(uniqueMap.values()).sort((a, b) => a.name.localeCompare(b.name));
     }, [erpData]);
 
+    // Handler: Synchronize Sick Leaves
+    const handleSyncSickLeaves = async () => {
+        if (isSyncing) return;
+
+        setIsSyncing(true);
+        setSyncProgress(null);
+
+        try {
+            const result = await SickLeaveSyncService.syncAllActiveSickLeaves(
+                activeSickLeaves,
+                (current, total) => setSyncProgress({ current, total })
+            );
+
+            const { processed, fichajesCreated, errors } = result;
+
+            if (errors > 0) {
+                showNotification(
+                    `Sincronizadas ${processed} bajas con ${errors} errores. Fichajes creados: ${fichajesCreated}`,
+                    'warning'
+                );
+            } else {
+                showNotification(
+                    `✅ Sincronización completada: ${processed} bajas procesadas, ${fichajesCreated} fichajes creados`,
+                    'success'
+                );
+            }
+
+            // Refrescar datos para mostrar los nuevos fichajes
+            onRefresh();
+        } catch (error) {
+            console.error('Error durante sincronización:', error);
+            showNotification(
+                `Error al sincronizar: ${error instanceof Error ? error.message : 'Desconocido'}`,
+                'error'
+            );
+        } finally {
+            setIsSyncing(false);
+            setSyncProgress(null);
+        }
+    };
+
     // Actions
     const handleSaveNewSickLeave = async (leaveData: SickLeaveFormData, operario?: Operario) => {
         // If we have specific operario object passed, use it. Otherwise try to find in options (fallback, mainly for validation if old code used)
@@ -283,7 +329,7 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
         if (leaveData.fechaRevision) {
             SickLeaveMetadataService.update(employee.id, leaveData.startDate, {
                 nextRevisionDate: leaveData.fechaRevision
-            });
+            }, 'System');
         }
 
         const reasonId = leaveData.type === 'ITAT' ? 10 : 11;
@@ -401,7 +447,7 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
     };
 
     const handleUpdateRevisionDate = (leave: LeaveRange, date: string) => {
-        SickLeaveMetadataService.update(leave.employeeId, leave.startDate, { nextRevisionDate: date });
+        SickLeaveMetadataService.update(leave.employeeId, leave.startDate, { nextRevisionDate: date }, 'System');
         onRefresh(); // Refresh independent active list
         showNotification("Fecha de revisión actualizada", 'success');
     };
@@ -497,6 +543,31 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
                         >
                             <span className="mr-1 text-lg">+</span> Registrar Baja
                         </button>
+                        {activeView === 'active' && (
+                            <button
+                                onClick={handleSyncSickLeaves}
+                                disabled={isSyncing || activeLeaves.length === 0}
+                                className={`px-4 py-2 rounded-lg font-bold text-sm flex items-center shadow-sm whitespace-nowrap transition-all ${isSyncing
+                                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                    : 'bg-green-600 text-white hover:bg-green-700'
+                                    }`}
+                                title="Sincronizar fichajes de bajas activas"
+                            >
+                                {isSyncing ? (
+                                    <>
+                                        <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Sincronizando...
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className="mr-2">🔄</span> Sincronizar Fichajes
+                                    </>
+                                )}
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>

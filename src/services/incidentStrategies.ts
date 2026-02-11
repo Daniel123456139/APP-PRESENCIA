@@ -1,4 +1,4 @@
-import { RawDataRow, ProcessedDataRow, UnjustifiedGap } from '../types';
+import { RawDataRow, ProcessedDataRow, UnjustifiedGap, WorkdayDeviation } from '../types';
 
 /**
  * Normaliza la hora a HH:MM (primeros 5 caracteres)
@@ -103,7 +103,8 @@ export const generateGapStrategy = (
             Entrada: 1,
             MotivoAusencia: null,
             DescMotivoAusencia: '',
-            Computable: 'Sí'
+            Computable: 'Sí' as any,
+            GeneradoPorApp: true
         };
 
         const exitRow = {
@@ -114,7 +115,8 @@ export const generateGapStrategy = (
             DescMotivoAusencia: reason.desc,
             Computable: 'No',
             Inicio: shift.start,
-            Fin: gapEnd // Guardamos el fin real del gap para referencia visual
+            Fin: gapEnd, // Guardamos el fin real del gap para referencia visual
+            GeneradoPorApp: true
         };
 
         return {
@@ -138,7 +140,8 @@ export const generateGapStrategy = (
             Entrada: 1,
             MotivoAusencia: null,
             DescMotivoAusencia: '',
-            Computable: 'Sí'
+            Computable: 'Sí' as any,
+            GeneradoPorApp: true
         };
 
         const exitRow = {
@@ -149,7 +152,8 @@ export const generateGapStrategy = (
             DescMotivoAusencia: reason.desc,
             Computable: 'No',
             Inicio: gapStart,
-            Fin: shift.end
+            Fin: shift.end,
+            GeneradoPorApp: true
         };
 
         return {
@@ -176,7 +180,8 @@ export const generateGapStrategy = (
         Entrada: 1,
         MotivoAusencia: null,
         DescMotivoAusencia: '',
-        Computable: 'Sí'
+        Computable: 'Sí' as any,
+        GeneradoPorApp: true
     };
 
     const exitRow = {
@@ -185,9 +190,10 @@ export const generateGapStrategy = (
         Entrada: 0,
         MotivoAusencia: reason.id, // Aquí va la incidencia (ej. Médico)
         DescMotivoAusencia: reason.desc,
-        Computable: 'No',
+        Computable: 'No' as any,
         Inicio: gapStart, // Ref original
-        Fin: gapEnd      // Ref original
+        Fin: gapEnd,      // Ref original
+        GeneradoPorApp: true
     };
 
     return {
@@ -224,7 +230,8 @@ export const generateFullDayStrategy = (
         Entrada: 1,
         MotivoAusencia: null,
         DescMotivoAusencia: '',
-        Computable: 'Sí'
+        Computable: 'Sí' as any,
+        GeneradoPorApp: true
     };
 
     const exitRow = {
@@ -233,9 +240,10 @@ export const generateFullDayStrategy = (
         Entrada: 0,
         MotivoAusencia: reason.id,
         DescMotivoAusencia: reason.desc,
-        Computable: 'No',
+        Computable: 'No' as any,
         Inicio: shift.start,
-        Fin: shift.end
+        Fin: shift.end,
+        GeneradoPorApp: true
     };
 
     return {
@@ -285,7 +293,8 @@ export const generateWorkdayStrategy = (
         Entrada: 1,
         MotivoAusencia: null,
         DescMotivoAusencia: '',
-        Computable: 'Sí'
+        Computable: 'Sí' as any,
+        GeneradoPorApp: true
     };
 
     const exitRow = {
@@ -294,9 +303,10 @@ export const generateWorkdayStrategy = (
         Entrada: 0,
         MotivoAusencia: reason.id,
         DescMotivoAusencia: reason.desc,
-        Computable: 'No',
+        Computable: 'No' as any,
         Inicio: shift.end,
-        Fin: shift.end
+        Fin: shift.end,
+        GeneradoPorApp: true
     };
 
     return {

@@ -28,7 +28,9 @@ const AdvancedEmployeeFilter: React.FC<AdvancedEmployeeFilterProps> = ({
             DescOperario: u.name,
             IDDepartamento: 0, // Mock/Unknown as User type doesn't have it
             DescDepartamento: String(u.role), // Mapping role to Dept for display purposes if needed
-            Activo: true // Assuming active as they are in the list
+            Activo: true, // Assuming active as they are in the list
+            Productivo: true,
+            Flexible: false
         }));
     }, [employeesToShow]);
 

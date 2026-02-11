@@ -1,5 +1,5 @@
 
-import { ProcessedDataRow, RawDataRow, Shift } from '../types';
+import { ProcessedDataRow, RawDataRow, Shift, User } from '../types';
 import { processData } from './dataProcessor';
 
 // Caché en memoria
@@ -24,12 +24,12 @@ const generateCacheKey = (rawData: RawDataRow[], shifts: Shift[], holidays?: Set
 /**
  * Wrapper memoizado de processData.
  */
-export const processDataMemoized = (rawData: RawDataRow[], shifts: Shift[] = [], employeeId?: number, holidays?: Set<string>): ProcessedDataRow[] => {
+export const processDataMemoized = (rawData: RawDataRow[], users: User[] = [], employeeId?: number, holidays?: Set<string>): ProcessedDataRow[] => {
     if (employeeId) {
-        return processData(rawData, shifts, employeeId, undefined, holidays);
+        return processData(rawData, users, employeeId, undefined, holidays);
     }
 
-    const key = generateCacheKey(rawData, shifts, holidays);
+    const key = generateCacheKey(rawData, users as any, holidays); // Cast to ignore shift/user mismatch in key gen for now
 
     if (cache.has(key)) {
         console.debug("⚡ Memoized Hit: processData");
@@ -37,7 +37,7 @@ export const processDataMemoized = (rawData: RawDataRow[], shifts: Shift[] = [],
     }
 
     console.debug("🐢 Memoized Miss: Recalculating processData...");
-    const result = processData(rawData, shifts, undefined, undefined, holidays);
+    const result = processData(rawData, users, undefined, undefined, holidays);
 
     cache.clear();
     cache.set(key, result);

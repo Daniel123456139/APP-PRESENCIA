@@ -44,8 +44,14 @@ export const countWorkingDays = (startDateStr: string, endDateStr: string, holid
     const start = parseISOToLocalDate(startDateStr);
     const end = parseISOToLocalDate(endDateStr);
     const cur = new Date(start);
+    let guard = 0;
 
     while (cur <= end) {
+        guard++;
+        if (guard > 4000) {
+            console.error('[countWorkingDays] Guard limit reached, breaking loop.', { startDateStr, endDateStr });
+            break;
+        }
         const dayOfWeek = cur.getDay();
         const iso = toISODateLocal(cur);
 
@@ -78,8 +84,8 @@ export const getSmartDefaultDateRange = (): { startDate: string, endDate: string
         // Domingo -> Viernes anterior (2 días atrás)
         daysToSubtract = 2;
     } else if (dayOfWeek === 1) {
-        // Lunes -> Lunes anterior (7 días atrás)
-        daysToSubtract = 7;
+        // Lunes -> Viernes anterior (3 días atrás)
+        daysToSubtract = 3;
     }
     // Para Sábado (6), daysToSubtract es 1 (Ayer = Viernes), que es correcto.
 

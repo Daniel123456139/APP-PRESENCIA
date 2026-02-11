@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { RawDataRow } from '../../types';
+import { normalizeDateKey } from '../../utils/datetime';
 
 interface VacationsTableProps {
     erpData: RawDataRow[];
@@ -21,7 +22,8 @@ const VacationsTable: React.FC<VacationsTableProps> = ({ erpData, startDate, end
 
         erpData.forEach(row => {
             // Only consider rows in the date range
-            if (row.Fecha < startDate || row.Fecha > endDate) return;
+            const dateKey = normalizeDateKey(row.Fecha);
+            if (!dateKey || dateKey < startDate || dateKey > endDate) return;
 
             // Only consider vacation days (TipoDiaEmpresa === 2)
             if (row.TipoDiaEmpresa !== 2) return;
@@ -36,8 +38,8 @@ const VacationsTable: React.FC<VacationsTableProps> = ({ erpData, startDate, end
             }
 
             const entry = employeeMap.get(row.IDOperario)!;
-            if (!entry.vacationDates.includes(row.Fecha)) {
-                entry.vacationDates.push(row.Fecha);
+            if (!entry.vacationDates.includes(dateKey)) {
+                entry.vacationDates.push(dateKey);
             }
         });
 
@@ -93,17 +95,17 @@ const VacationsTable: React.FC<VacationsTableProps> = ({ erpData, startDate, end
     };
 
     return (
-        <div className="bg-white rounded-xl shadow-sm border border-green-200 overflow-hidden mb-6">
-            <div className="bg-green-50 px-4 py-3 border-b border-green-100 flex items-center justify-between">
-                <h3 className="font-bold text-green-800 flex items-center gap-2">
+        <div className="bg-white/90 rounded-2xl shadow-lg border border-green-200 overflow-hidden mb-6">
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-5 py-4 border-b border-green-100 flex items-center justify-between">
+                <h3 className="font-bold text-green-800 flex items-center gap-2 uppercase tracking-wider">
                     <span className="text-xl">🏖️</span>
                     Personal de Vacaciones
                 </h3>
-                <span className="bg-green-200 text-green-800 text-xs font-bold px-2 py-1 rounded-full">{vacations.length}</span>
+                <span className="bg-green-200 text-green-800 text-xs font-bold px-2.5 py-1 rounded-full">{vacations.length}</span>
             </div>
             <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-slate-200">
-                    <thead className="bg-slate-50">
+                    <thead className="bg-slate-50/80">
                         <tr>
                             <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">ID</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Empleado</th>

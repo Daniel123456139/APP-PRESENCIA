@@ -13,7 +13,7 @@
     "date-fns": "^4.1.0",
     "firebase": "^12.6.0",
     "html2canvas": "^1.4.1",
-    "jspdf": "^4.0.0",
+    "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
@@ -21,6 +21,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
     "react-window": "^1.8.10",
+    "recharts": "^3.7.0",
     "remark-gfm": "^4.0.0",
     "xlsx": "^0.18.5"
   },

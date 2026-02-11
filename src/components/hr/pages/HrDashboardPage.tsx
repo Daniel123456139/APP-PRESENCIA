@@ -1,5 +1,5 @@
 import React from 'react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useHrLayout } from '../HrLayout';
 import { toISODateLocal } from '../../../utils/localDate';
 import HrFilters from '../HrFilters';
@@ -47,8 +47,10 @@ const HrDashboardPage: React.FC = () => {
         handleIncidentClick,
         handleOpenManualIncident,
         isLongRange,
+        handleUnproductivityExport,
 
-        datasetAusencias
+        datasetAusencias,
+        effectiveCalendarDays
     } = useHrLayout();
 
     const getFullMonthRange = (dateStr: string) => {
@@ -79,8 +81,54 @@ const HrDashboardPage: React.FC = () => {
         setIsExportModalOpen(false);
     };
 
+    const flexibleEmployeeIds = useMemo(() => {
+        return new Set((employeeOptions as Array<{ id: number; flexible?: boolean }>).filter(emp => emp.flexible).map(emp => emp.id));
+    }, [employeeOptions]);
+
+    // Check if we are viewing a single day matches Type 1 (Festive/Saturday)
+    const isDayType1 = useMemo(() => {
+        if (startDate !== endDate) return false;
+
+        // 1. Try to find in effectiveCalendarDays logic
+        // Note: effectiveCalendarDays might be per employee, but usually it's the specific calendar loaded.
+        // Actually typically distinct days. 
+        if (effectiveCalendarDays && effectiveCalendarDays.length > 0) {
+            const dayRecord = effectiveCalendarDays.find(d => d.Fecha === startDate);
+            if (dayRecord) {
+                // Check loose equality as API sometimes sends "1" or 1
+                return String(dayRecord.TipoDia) === "1";
+            }
+        }
+
+        // 2. Fallback: Check if Saturday (Day 6)
+        // Note: Sundays are usually Type 1 too but user specifically mentioned Saturdays logic.
+        const d = new Date(startDate);
+        return d.getDay() === 6;
+    }, [startDate, endDate, effectiveCalendarDays]);
+
     return (
         <div className="space-y-6">
+            <div className="bg-gradient-to-br from-white via-slate-50 to-indigo-50 rounded-2xl border border-slate-200/70 p-6 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                    <div>
+                        <h1 className="text-3xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-sky-600">
+                            Gestión de Fichajes
+                        </h1>
+                        <p className="text-sm text-slate-600 mt-1">
+                            Control de presencia, ausencias e incidencias en tiempo real.
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="px-4 py-2 rounded-xl bg-white/80 border border-slate-200 text-sm text-slate-600 shadow-sm">
+                            <span className="font-semibold">Periodo:</span>{' '}
+                            <span className="font-mono text-slate-800">{startDate}</span>
+                            <span className="mx-1">→</span>
+                            <span className="font-mono text-slate-800">{endDate}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
                 <HrFilters
                     startDate={startDate} setStartDate={setStartDate}
@@ -129,6 +177,7 @@ const HrDashboardPage: React.FC = () => {
                         startDate={startDate}
                         endDate={endDate}
                         isLongRange={isLongRange}
+                        flexibleEmployeeIds={flexibleEmployeeIds}
                     />
                 ) : (
                     <HrDataTable
@@ -142,22 +191,28 @@ const HrDashboardPage: React.FC = () => {
                         endDate={endDate}
                         companyHolidays={companyHolidays}
                         isLongRange={isLongRange}
+                        flexibleEmployeeIds={flexibleEmployeeIds}
                     />
                 )
             )}
 
-            <AusenciasTable
-                data={datasetAusencias}
-                onRegisterIncident={handleIncidentClick}
-                startDate={startDate}
-                endDate={endDate}
-            />
+            {/* Only show secondary tables if NOT a Type 1 day (Saturday/Festive) when viewing a single day */}
+            {(!isDayType1) && (
+                <>
+                    <AusenciasTable
+                        data={datasetAusencias}
+                        onRegisterIncident={handleIncidentClick}
+                        startDate={startDate}
+                        endDate={endDate}
+                    />
 
-            <VacationsTable
-                erpData={erpData}
-                startDate={startDate}
-                endDate={endDate}
-            />
+                    <VacationsTable
+                        erpData={erpData}
+                        startDate={startDate}
+                        endDate={endDate}
+                    />
+                </>
+            )}
 
             <ExportNominasModal
                 isOpen={isExportModalOpen}

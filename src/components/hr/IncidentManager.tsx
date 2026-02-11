@@ -1,4 +1,4 @@
-import React, { useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { RawDataRow, ProcessedDataRow, Role, IncidentLogEntry, UnjustifiedGap, WorkdayDeviation } from '../../types';
 import { useErpDataActions } from '../../store/erpDataStore';
 import { useNotification } from '../shared/NotificationContext';
@@ -13,13 +13,14 @@ import { getMotivosAusencias } from '../../services/erpApi';
 import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
 import { generateGapStrategy, generateFullDayStrategy, generateWorkdayStrategy } from '../../services/incidentStrategies';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
-import { logIncident as logFirestoreIncident } from '../../services/firestoreService';
+import { logIncident as logFirestoreIncident, logSyntheticPunch } from '../../services/firestoreService';
 
 export interface EmployeeOption {
     id: number;
     name: string;
     role: Role;
     department: string;
+    flexible?: boolean;
 }
 
 export interface IncidentManagerHandle {
@@ -94,6 +95,9 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
     const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false);
     const [adjustmentData, setAdjustmentData] = useState<RawDataRow[]>([]);
     const [adjustmentShifts, setAdjustmentShifts] = useState<Map<number, string>>(new Map());
+    const flexibleEmployeeIds = useMemo(() => {
+        return new Set(employeeOptions.filter(emp => emp.flexible).map(emp => emp.id));
+    }, [employeeOptions]);
 
     const [isFreeHoursModalOpen, setIsFreeHoursModalOpen] = useState(false);
     const [freeHoursEmployees, setFreeHoursEmployees] = useState<EmployeeOption[]>([]);
@@ -182,6 +186,9 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
 
         try {
             const shift = getShiftBounds(selectedEmployeeForManual.turnoAsignado);
+            let entryRow: Partial<RawDataRow>;
+            let exitRow: Partial<RawDataRow>;
+            let desc = '';
 
             if (!data.isFullDay) {
                 // MANUAL PARTIAL
@@ -191,25 +198,9 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                 }
 
                 const startStr = data.startTime.length === 5 ? `${data.startTime}:00` : data.startTime;
+                const endStr = data.endTime.length === 5 ? `${data.endTime}:00` : data.endTime;
 
-                // Determine if this is a "Late Entry" fix or "Early Exit" fix is hard manual; 
-                // BUT User Request Case 1 & 2 logic implies we want to create specific pairs.
-                // However, MANUAL interaction usually implies "Create this specific gap filler".
-                // If the user inputs 12:00 to 15:00 manually, we treat it like Case 1.
-                // If they input 07:00 to 09:00 manually, Case 2.
-                // We will stick to the user's explicit request for inserting Entry + Exit pair.
-
-                // ENTRY (Normal, no reason) - at Gap Start?
-                // Wait, User Logic Case 1: "Insertar entrada normal... minuto posterior al que el operario ficho la salida".
-                // In Manual Mode, we don't necessarily know the "ficho la salida" time unless we look it up.
-                // But generally Manual Incident is used when there is NO punch or to override.
-
-                // Let's assume Manual follows the generic pattern:
-                // Create Entry (Empty Reason) at Start
-                // Create Exit (Reason) at End
-                // This matches generic "justification".
-
-                const entryRow: Partial<RawDataRow> = {
+                entryRow = {
                     IDOperario: selectedEmployeeForManual.operario,
                     DescOperario: selectedEmployeeForManual.nombre,
                     Fecha: data.date,
@@ -221,11 +212,11 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     IDControlPresencia: 0,
                     Computable: 'Sí',
                     TipoDiaEmpresa: 0,
-                    TurnoTexto: selectedEmployeeForManual.turnoAsignado
+                    TurnoTexto: selectedEmployeeForManual.turnoAsignado,
+                    GeneradoPorApp: true
                 };
 
-                const endStr = data.endTime.length === 5 ? `${data.endTime}:00` : data.endTime;
-                const exitRow: Partial<RawDataRow> = {
+                exitRow = {
                     IDOperario: selectedEmployeeForManual.operario,
                     DescOperario: selectedEmployeeForManual.nombre,
                     Fecha: data.date,
@@ -239,17 +230,14 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     TipoDiaEmpresa: 0,
                     TurnoTexto: selectedEmployeeForManual.turnoAsignado,
                     Inicio: startStr,
-                    Fin: endStr
+                    Fin: endStr,
+                    GeneradoPorApp: true
                 };
+                desc = "Manual Gap Pair";
 
-                await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], "Manual Gap Pair");
-                showNotification("Incidencia manual registrada.", "success");
             } else {
-                // MANUAL FULL DAY -> Case 4
-                // Insert Entry @ ShiftStart (Null Reason)
-                // Insert Exit @ ShiftEnd (Reason)
-
-                const entryRow: Partial<RawDataRow> = {
+                // MANUAL FULL DAY
+                entryRow = {
                     IDOperario: selectedEmployeeForManual.operario,
                     DescOperario: selectedEmployeeForManual.nombre,
                     Fecha: data.date,
@@ -261,10 +249,11 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     IDControlPresencia: 0,
                     Computable: 'Sí',
                     TipoDiaEmpresa: 0,
-                    TurnoTexto: selectedEmployeeForManual.turnoAsignado
+                    TurnoTexto: selectedEmployeeForManual.turnoAsignado,
+                    GeneradoPorApp: true
                 };
 
-                const exitRow: Partial<RawDataRow> = {
+                exitRow = {
                     IDOperario: selectedEmployeeForManual.operario,
                     DescOperario: selectedEmployeeForManual.nombre,
                     Fecha: data.date,
@@ -278,20 +267,31 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     TipoDiaEmpresa: 0,
                     TurnoTexto: selectedEmployeeForManual.turnoAsignado,
                     Inicio: shift.start.substring(0, 5),
-                    Fin: shift.end.substring(0, 5)
+                    Fin: shift.end.substring(0, 5),
+                    GeneradoPorApp: true
                 };
-
-                await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], "Manual Full Day");
-                showNotification("Día completo registrado.", "success");
+                desc = data.isFullDay ? 'Ausencia Completa' : 'Incidencia Manual';
             }
 
-            logIncident(
-                selectedEmployeeForManual,
-                data.reasonId,
-                data.reasonDesc,
-                data.isFullDay ? 'Ausencia Completa' : 'Incidencia Manual',
-                `Manual: ${data.date}`
-            );
+            // Save to Database/ERP
+            await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], desc);
+
+            // Logging Synthetic Punches to Firestore
+            const newRows = [entryRow, exitRow];
+            for (const row of newRows) {
+                if (row.GeneradoPorApp && row.IDOperario) {
+                    await logSyntheticPunch({
+                        employeeId: row.IDOperario.toString(),
+                        date: row.Fecha || '',
+                        time: row.Hora || '',
+                        reasonId: row.MotivoAusencia || null,
+                        reasonDesc: row.DescMotivoAusencia || '',
+                        direction: row.Entrada ? 'Entrada' : 'Salida'
+                    });
+                }
+            }
+
+            showNotification(`Incidencia manual registrada: ${desc}`, "success");
             onRefreshNeeded();
 
         } catch (error: unknown) {
@@ -346,6 +346,20 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
             if (strategyResult.rowsToInsert.length > 0) {
                 await addIncidents(strategyResult.rowsToInsert as RawDataRow[], strategyResult.description);
                 didSave = true;
+
+                // LOGGING SYNTHETIC PUNCHES TO FIRESTORE (SIDECAR)
+                for (const row of strategyResult.rowsToInsert) {
+                    if (row.GeneradoPorApp && row.IDOperario) {
+                        await logSyntheticPunch({
+                            employeeId: row.IDOperario.toString(),
+                            date: row.Fecha || '',
+                            time: row.Hora || '',
+                            reasonId: row.MotivoAusencia || null,
+                            reasonDesc: row.DescMotivoAusencia || '',
+                            direction: row.Entrada ? 'Entrada' : 'Salida'
+                        });
+                    }
+                }
             }
 
             if (strategyResult.rowsToUpdate.length > 0) {
@@ -433,6 +447,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                         setIsAdjustmentModalOpen(false);
                     }}
                     employeeShifts={adjustmentShifts}
+                    flexibleEmployeeIds={flexibleEmployeeIds}
                 />
             )}
 

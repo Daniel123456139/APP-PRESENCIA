@@ -13,6 +13,7 @@ export interface User {
     uid?: string;
     email?: string;
     appRole?: 'HR' | 'EMPLOYEE' | 'MANAGEMENT';
+    flexible?: boolean;
 }
 
 export interface BaseRecord {
@@ -38,6 +39,7 @@ export interface RawDataRow {
     Fin: string; // HH:MM
     TipoDiaEmpresa: number; // 0 for normal day, 1 for holiday
     TurnoTexto: string;
+    GeneradoPorApp?: boolean; // Flag to identify synthetic punches persisted in Firestore
 }
 
 // Nueva interfaz para agrupar filas consecutivas
@@ -74,6 +76,18 @@ export interface TimeSlice {
     start: string; // HH:mm
     end: string;   // HH:mm
     endIsNextDay: boolean;
+    isSynthetic?: boolean;
+}
+
+export interface JustifiedInterval {
+    date: string; // YYYY-MM-DD
+    start: string; // HH:mm
+    end: string;   // HH:mm
+    endIsNextDay?: boolean;
+    motivoId: number;
+    motivoDesc?: string;
+    source: 'calendar' | 'punch' | 'manual';
+    isSynthetic?: boolean;
 }
 
 export interface ProcessedDataRow {
@@ -81,12 +95,16 @@ export interface ProcessedDataRow {
     nombre: string;
     colectivo: string;
     turnoAsignado: string; // 'M' o 'TN'
+    isFlexible?: boolean;
 
     // NUEVO: Horario real formateado (ej: "15:00 - 23:00" o "22:00 - 06:00 (+1)")
     horarioReal: string;
 
     // NUEVO: Lista de todos los tramos horarios individuales
     timeSlices: TimeSlice[];
+
+    // NUEVO: Tramos/intervalos justificados (incidencias)
+    justifiedIntervals: JustifiedInterval[];
 
     // 4. TOTAL Horas (Calculated sum of worked hours)
     totalHoras: number;
@@ -146,6 +164,7 @@ export interface ProcessedDataRow {
     // Incidents
     numTAJ: number;         // 31. Count
     hTAJ: number;           // 32. Hours
+    festiveTaj: number;     // NEW: Track TAJ specifically on festive days to avoid double counting in Total
     numRetrasos: number;    // 33. Count
     tiempoRetrasos: number; // 34. Time
 
@@ -310,4 +329,70 @@ export interface JobControlEntry {
     QBuena: number | null;
     QFabricar: number | null;
     Observaciones: string | null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TIPOS DE ANÁLISIS DE PRIORIDADES
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Artículo del Excel "LISTADO DE CARGA"
+ * Representa la información de prioridad de fabricación
+ */
+export interface PriorityArticle {
+    articulo: string;              // Columna F: Código del artículo
+    cliente: string;               // Columna H: Cliente que requiere la pieza
+    descripcion: string;           // Columna G: Descripción del artículo
+    fechaRequerida: Date | null;   // Columna I: FECHA REQUERIDA CLIENTE (crítica)
+    cantidad: number;              // Columna K: Cantidad requerida
+    stock: number;                 // Columna L: Cantidad ya fabricada
+    pedido: string;                // Columna N: Número de pedido
+    bin: number;                   // Columna R: Stock mínimo acordado
+    faseR: string;                 // Columna T: Fases pendientes
+    lanz: string;                  // Columna V: Indica si se lanzó OF
+}
+
+/**
+ * Trabajo individual clasificado como urgente o no urgente
+ */
+export interface WorkClassification {
+    employeeId: string;
+    employeeName: string;
+    articleId: string;
+    of: string | null;
+    missingOF: boolean;
+    department: string;
+    descripcion: string;
+    cliente: string;
+    fechaRequerida: Date | null;
+    diasHastaEntrega: number | null;
+    horasDedicadas: number;       // CRÍTICO: Mostrar siempre en formato XXX.Xh
+    urgency: 'URGENTE' | 'NO_URGENTE';
+}
+
+/**
+ * Análisis de prioridades por empleado
+ * Agrupa trabajos urgentes vs no urgentes con sus respectivas horas
+ */
+export interface EmployeePriorityAnalysis {
+    employeeId: string;
+    employeeName: string;          // CRÍTICO: Siempre visible, nunca solo ID
+    trabajosUrgentes: number;
+    horasUrgentes: number;         // CRÍTICO: Formato XXX.Xh
+    trabajosNoUrgentes: number;
+    horasNoUrgentes: number;       // CRÍTICO: Formato XXX.Xh
+    cumplimiento: number;          // Porcentaje (0-100)
+    trabajosDetalle: WorkClassification[];
+}
+
+/**
+ * Estadísticas globales del análisis de prioridades
+ */
+export interface GlobalPriorityStats {
+    totalArticulos: number;
+    trabajosCorrectos: number;     // Trabajos urgentes (correctos)
+    horasCorrectas: number;        // CRÍTICO: Formato XXX.Xh
+    desviaciones: number;          // Trabajos NO urgentes (incorrectos)
+    horasDesviadas: number;        // CRÍTICO: Formato XXX.Xh
+    tasaExito: number;             // Porcentaje (0-100)
 }

@@ -58,7 +58,7 @@ const ActiveSickLeavesTable: React.FC<ActiveSickLeavesTableProps> = ({ data, onE
             : "¿Establecer fecha de alta? La baja pasará al histórico inmediatamente.")) {
 
             // 1. Always update metadata (so manager knows about the date)
-            SickLeaveMetadataService.update(employeeId, startDate, { dischargeDate: date });
+            SickLeaveMetadataService.update(employeeId, startDate, { dischargeDate: date }, 'System');
 
             // 2. Only move to history DB if date is reached
             if (!isFuture) {
@@ -201,7 +201,7 @@ const ActiveSickLeavesTable: React.FC<ActiveSickLeavesTableProps> = ({ data, onE
                                                 type="date"
                                                 value={nextRevision || ''}
                                                 onChange={(e) => {
-                                                    SickLeaveMetadataService.update(leave.employeeId, leave.startDate, { nextRevisionDate: e.target.value });
+                                                    SickLeaveMetadataService.update(leave.employeeId, leave.startDate, { nextRevisionDate: e.target.value }, 'System');
                                                     onRefresh();
                                                     showNotification("Revisión actualizada", 'success');
                                                 }}

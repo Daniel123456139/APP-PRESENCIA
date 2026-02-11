@@ -29,6 +29,7 @@ export interface EmployeeIdentity {
     Productivo: boolean;
     IDDepartamento: number;
     DescDepartamento: string;
+    Flexible: boolean;
 }
 
 /**
@@ -103,7 +104,8 @@ export async function getEmployeeIdentities(onlyActive: boolean = true): Promise
             Activo: op.Activo,
             Productivo: op.Productivo,
             IDDepartamento: op.IDDepartamento,
-            DescDepartamento: op.DescDepartamento
+            DescDepartamento: op.DescDepartamento,
+            Flexible: op.Flexible
         }));
     } catch (error) {
         logger.error('❌ Error obteniendo identidades de empleados desde API:', error);

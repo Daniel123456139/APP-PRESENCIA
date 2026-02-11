@@ -2,7 +2,7 @@
 import React, { memo, useState, useMemo } from 'react';
 import { ProcessedDataRow } from '../../types';
 import { formatPeriodoAnalisis } from '../../utils/dateFormatter';
-import { ScheduleCell } from './HrDataTable';
+import { ScheduleCell, JustifiedCell } from './HrDataTable';
 import { formatEmployeeId } from '../../utils/formatters';
 
 interface HrDataTableVirtualProps {
@@ -14,6 +14,7 @@ interface HrDataTableVirtualProps {
     startDate?: string;
     endDate?: string;
     isLongRange?: boolean;
+    flexibleEmployeeIds?: Set<number>;
 }
 
 // Helpers
@@ -113,9 +114,12 @@ interface RowProps {
     justifiedKeys: Map<string, number>;
     isLongRange?: boolean;
     setViewingShiftChanges?: (data: { name: string, changes: any[] } | null) => void;
+    flexibleEmployeeIds?: Set<number>;
+    startDate?: string;
+    endDate?: string;
 }
 
-const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange, setViewingShiftChanges }: RowProps) => {
+const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, startDate, endDate }: RowProps) => {
     const hasPendingIncidents = row.incidentCount > 0;
     const justifiedEntries = Array.from(justifiedKeys.entries()).filter(([k, v]) => {
         const idStr = String(row.operario);
@@ -127,7 +131,10 @@ const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange,
     const hasAbsence = row.absentDays && row.absentDays.length > 0;
     const hasMissingOut = row.missingClockOuts && row.missingClockOuts.length > 0;
 
-    const rowClass = "hover:bg-slate-50 border-l-4 border-l-transparent";
+    const isFlexible = row.isFlexible || flexibleEmployeeIds?.has(row.operario);
+    const rowClass = isFlexible
+        ? "bg-emerald-50 hover:bg-emerald-100 border-l-4 border-l-emerald-400"
+        : "hover:bg-slate-50/70 border-l-4 border-l-transparent";
 
     return (
         <div className={`flex items-center border-b border-slate-200 text-sm h-[50px] ${rowClass}`}>
@@ -137,20 +144,22 @@ const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange,
                 {!isLongRange && <ScheduleCell row={row} />}
             </div>
             <div className="w-32 px-4 text-center">
-                <span className={`px-2 py-1 rounded-full text-xs font-bold ${row.turnoAsignado === 'M' ? 'bg-yellow-100 text-yellow-800' : (row.turnoAsignado === 'TN' || row.turnoAsignado === 'T' ? 'bg-blue-100 text-blue-800' : 'bg-slate-100 text-slate-800')}`}>
+                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${row.turnoAsignado === 'M' ? 'bg-amber-100 text-amber-800' : (row.turnoAsignado === 'TN' || row.turnoAsignado === 'T' ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-800')}`}>
                     {row.turnoAsignado}
                 </span>
                 {isLongRange && row.shiftChanges && row.shiftChanges.length > 0 && (
                     <button
                         onClick={(e) => { e.stopPropagation(); setViewingShiftChanges({ name: row.nombre, changes: row.shiftChanges }); }}
-                        className="ml-2 text-[10px] bg-green-100 text-green-800 border border-green-200 px-1.5 py-0.5 rounded hover:bg-green-200 transition-colors font-bold"
+                        className="ml-2 text-[10px] bg-emerald-100 text-emerald-800 border border-emerald-200 px-1.5 py-0.5 rounded hover:bg-emerald-200 transition-colors font-bold"
                     >
                         Cambios 🏷️
                     </button>
                 )}
             </div>
             <div className="w-32 px-4 text-right">{row.presencia.toFixed(2)} h</div>
-            <div className="w-32 px-4 text-right text-blue-600 font-mono">{row.horasJustificadas.toFixed(2)} h</div>
+            <div className="w-32 px-4 text-right">
+                <JustifiedCell row={row} startDate={startDate} endDate={endDate} align="right" />
+            </div>
             <div className="w-32 px-4 text-right font-bold font-mono">{row.horasTotalesConJustificacion.toFixed(2)} h</div>
             <div className="w-32 px-4 text-right text-orange-600 font-mono">{row.horasExceso.toFixed(2)} h</div>
             <div className="w-32 px-4 text-right text-purple-600 font-mono">{row.festivas ? row.festivas.toFixed(2) : '0.00'} h</div>
@@ -194,7 +203,7 @@ const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange,
 });
 
 
-const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, isLongRange }) => {
+const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, isLongRange, flexibleEmployeeIds }) => {
     const [sortConfig, setSortConfig] = useState<{ key: SortableKeys; direction: SortDirection } | null>({ key: 'operario', direction: 'ascending' });
     const [viewingShiftChanges, setViewingShiftChanges] = useState<{ name: string, changes: any[] } | null>(null);
 
@@ -260,14 +269,15 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
     }
 
     return (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-indigo-50 gap-2">
+        <div className="bg-white/90 rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
+            <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gradient-to-r from-indigo-50 via-sky-50 to-slate-50 gap-3">
                 <div>
-                    <h3 className="text-sm font-bold text-indigo-800 flex items-center">
-                        <span className="mr-2">⚡</span> RESUMEN EMPLEADOS
+                    <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 uppercase tracking-wider">
+                        <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white text-[11px]">⚡</span>
+                        Resumen Empleados
                     </h3>
                     {startDate && endDate && (
-                        <p className="text-xs text-indigo-600 mt-1">
+                        <p className="text-xs text-slate-600 mt-1">
                             Periodo: {formatPeriodoAnalisis(startDate, endDate)}
                         </p>
                     )}
@@ -275,7 +285,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                 <div className="flex items-center gap-3">
                     <button
                         onClick={onExport}
-                        className="flex items-center gap-1.5 px-2 py-1 bg-white text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-50 transition-colors text-xs font-semibold shadow-sm"
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-indigo-700 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-colors text-xs font-semibold shadow-sm"
                         title="Exportar tabla a Excel"
                     >
                         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -283,11 +293,11 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                         </svg>
                         Exportar
                     </button>
-                    <span className="text-xs text-indigo-600">{data.length} filas renderizadas</span>
+                    <span className="text-xs text-slate-500">{data.length} filas renderizadas</span>
                 </div>
             </div>
 
-            <div className="flex items-center bg-slate-100 border-b border-slate-300 h-10">
+            <div className="flex items-center bg-slate-100/80 border-b border-slate-200 h-10">
                 <TableHeader colKey="operario" label="ID" width="w-24" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="nombre" label="NOMBRE" width="flex-1" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="horarioReal" label="TIEMPO REAL" width="w-40" sortConfig={sortConfig} onSort={handleSort} />
@@ -314,6 +324,9 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                         justifiedKeys={justifiedIncidentKeys}
                         isLongRange={isLongRange}
                         setViewingShiftChanges={setViewingShiftChanges}
+                        flexibleEmployeeIds={flexibleEmployeeIds}
+                        startDate={startDate}
+                        endDate={endDate}
                     />
                 ))}
             </div>

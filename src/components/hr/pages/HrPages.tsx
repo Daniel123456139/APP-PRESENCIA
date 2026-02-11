@@ -6,7 +6,6 @@ import HrCalendarView from '../HrCalendarView';
 import SickLeaveManager from '../SickLeaveManager';
 import VacationManager from '../VacationManager';
 import IncidentHistoryPanel from '../IncidentHistoryPanel';
-import AbsenteeismDashboard from '../analytics/AbsenteeismDashboard';
 import EmployeeProfilePanel from '../EmployeeProfilePanel';
 import BlogManager from '../BlogManager';
 import Settings from '../Settings';
@@ -55,10 +54,7 @@ export const HrHistoryPage: React.FC = () => {
     );
 };
 
-export const HrAnalyticsPage: React.FC = () => {
-    const { erpData } = useHrLayout();
-    return <AbsenteeismDashboard erpData={erpData} />;
-};
+
 
 export const HrProfilesPage: React.FC = () => {
     return <EmployeeProfilePanel />;
@@ -75,6 +71,32 @@ export const HrSettingsPage: React.FC = () => {
 };
 
 export const HrJobsPage: React.FC = () => {
-    const { startDate, endDate } = useHrLayout();
-    return <JobManagement initialStartDate={startDate} initialEndDate={endDate} />;
+    const {
+        startDate, setStartDate, endDate, setEndDate,
+        startTime, endTime,
+        erpData, datasetResumen, isReloading,
+        departmentFilteredEmployees, selectedDepartment, setSelectedDepartment, computedDepartments,
+        employeeCalendarsByDate, lastUpdated, reloadFromServer
+    } = useHrLayout();
+
+    return (
+        <JobManagement
+            startDate={startDate}
+            setStartDate={setStartDate}
+            endDate={endDate}
+            setEndDate={setEndDate}
+            startTime={startTime}
+            endTime={endTime}
+            erpData={erpData}
+            datasetResumen={datasetResumen}
+            isReloading={isReloading}
+            departmentFilteredEmployees={departmentFilteredEmployees as any}
+            selectedDepartment={selectedDepartment}
+            setSelectedDepartment={setSelectedDepartment}
+            computedDepartments={computedDepartments}
+            employeeCalendarsByDate={employeeCalendarsByDate}
+            lastUpdated={lastUpdated}
+            reloadFromServer={reloadFromServer}
+        />
+    );
 };

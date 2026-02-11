@@ -115,13 +115,13 @@ const EmployeeMultiSelect: React.FC<EmployeeMultiSelectProps> = ({
                 type="button"
                 onClick={() => !disabled && setIsOpen(!isOpen)}
                 className={`
-                    w-full min-h-[42px] px-3 py-2 border rounded-md shadow-sm bg-white text-left flex items-center justify-between
-                    ${disabled ? 'bg-slate-100 cursor-not-allowed opacity-75' : 'hover:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-500'}
-                    ${isOpen ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-300'}
+                    w-full min-h-[44px] px-3 py-2 border rounded-lg shadow-sm bg-slate-50 text-left flex items-center justify-between
+                    ${disabled ? 'bg-slate-100 cursor-not-allowed opacity-75' : 'hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500'}
+                    ${isOpen ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-slate-200'}
                 `}
                 disabled={disabled}
             >
-                <span className={`block truncate ${selectedIds.length === 0 ? 'text-slate-400' : 'text-slate-700'}`}>
+                <span className={`block truncate text-sm ${selectedIds.length === 0 ? 'text-slate-400' : 'text-slate-700'}`}>
                     {loading ? 'Cargando...' : getSelectionLabel()}
                 </span>
                 <span className="flex items-center ml-2 pointer-events-none">
@@ -132,22 +132,22 @@ const EmployeeMultiSelect: React.FC<EmployeeMultiSelectProps> = ({
             </button>
 
             {isOpen && !disabled && (
-                <div className={`absolute z-50 mt-1 w-full bg-white shadow-lg rounded-md border border-slate-300 flex flex-col ${maxHeight}`}>
-                    <div className="p-2 border-b border-slate-200 bg-slate-50 space-y-2">
+                <div className={`absolute z-50 mt-2 w-full bg-white shadow-xl rounded-xl border border-slate-200 flex flex-col ${maxHeight}`}>
+                    <div className="p-3 border-b border-slate-200 bg-slate-50 space-y-2">
                         <input
                             ref={inputRef}
                             type="text"
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
                             placeholder="Buscar..."
-                            className="w-full py-1.5 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="w-full py-2 px-3 border border-slate-200 bg-white text-slate-900 rounded-lg shadow-sm text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                             onClick={(e) => e.stopPropagation()}
                         />
                         <div className="flex justify-between text-xs">
-                            <button onClick={handleSelectAllVisible} className="text-blue-600 hover:text-blue-800 font-medium">
+                            <button onClick={handleSelectAllVisible} className="text-indigo-600 hover:text-indigo-800 font-semibold">
                                 Seleccionar visibles
                             </button>
-                            <button onClick={handleClearSelection} className="text-red-600 hover:text-red-800 font-medium">
+                            <button onClick={handleClearSelection} className="text-red-600 hover:text-red-800 font-semibold">
                                 Limpiar todo
                             </button>
                         </div>
@@ -167,8 +167,8 @@ const EmployeeMultiSelect: React.FC<EmployeeMultiSelectProps> = ({
                                             key={op.IDOperario}
                                             onClick={() => toggleSelection(op.IDOperario)}
                                             className={`
-                                                cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-slate-50
-                                                ${isSelected ? 'bg-blue-50' : ''}
+                                                cursor-pointer select-none relative py-2.5 pl-3 pr-9 hover:bg-indigo-50/60
+                                                ${isSelected ? 'bg-indigo-50' : ''}
                                                 ${!op.Activo ? 'opacity-75' : ''}
                                             `}
                                         >
@@ -177,9 +177,9 @@ const EmployeeMultiSelect: React.FC<EmployeeMultiSelectProps> = ({
                                                     type="checkbox"
                                                     checked={isSelected}
                                                     readOnly
-                                                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded mr-2 pointer-events-none"
+                                                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded mr-2 pointer-events-none"
                                                 />
-                                                <span className={`block truncate text-sm ${isSelected ? 'font-semibold text-blue-900' : 'text-slate-700'}`}>
+                                                <span className={`block truncate text-sm ${isSelected ? 'font-semibold text-indigo-900' : 'text-slate-700'}`}>
                                                     <span className="font-mono text-slate-500 inline-block w-8">{op.IDOperario.toString().padStart(3, '0')}</span>
                                                     {op.DescOperario}
                                                     {!op.Activo && <span className="ml-1 text-xs italic text-slate-400">(Inactivo)</span>}

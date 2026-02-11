@@ -2,6 +2,7 @@
 import { RawDataRow, User } from '../../types';
 import { ANNUAL_CREDITS } from '../../constants';
 import { toISODateLocal } from '../../utils/localDate';
+import { normalizeDateKey } from '../../utils/datetime';
 import * as XLSX from 'xlsx';
 
 export interface FreeHoursExportRow {
@@ -34,7 +35,10 @@ export const exportFreeHoursToXlsx = (
 
     const rows: FreeHoursExportRow[] = allUsers.map(user => {
         const idOperario = user.id;
-        const empRawYTD = allRawDataYTD.filter(r => r.IDOperario === idOperario && r.Fecha >= ytdStartStr && r.Fecha <= exportDate);
+        const empRawYTD = allRawDataYTD.filter(r => {
+            const dateKey = normalizeDateKey(r.Fecha);
+            return r.IDOperario === idOperario && dateKey >= ytdStartStr && dateKey <= exportDate;
+        });
 
         // Motivo 7: Libre Disposición (Horas Libres)
         const consumo = empRawYTD
