@@ -128,6 +128,8 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
             if (isMorning) {
                 if (isEntry) {
                     // Start 07:00. Window [06:15 - 06:59]. (45 min antes)
+                    // ⚠️ CRITICAL FIX: Solo ajustar si llegó ANTES de las 07:00
+                    // Si llegó a las 07:04, NO ajustar (es un retraso real)
                     if (rowTimeMinutes >= toMinutes(6, 15) && rowTimeMinutes < toMinutes(7, 0)) {
                         results.push({
                             originalRow: row,
@@ -138,6 +140,8 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
                     }
                 } else if (isExit) {
                     // End 15:00. Window [15:01 - 15:15]. (15 min después)
+                    // ⚠️ CRITICAL FIX: Solo ajustar si salió DESPUÉS de las 15:00
+                    // Si salió a las 14:50, NO ajustar (es salida anticipada real)
                     if (rowTimeMinutes > toMinutes(15, 0) && rowTimeMinutes <= toMinutes(15, 15)) {
                         results.push({
                             originalRow: row,
@@ -150,6 +154,7 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
             } else if (isAfternoon) {
                 if (isEntry) {
                     // Start 15:00. Window [14:15 - 14:59]. (45 min antes)
+                    // ⚠️ CRITICAL FIX: Solo ajustar si llegó ANTES de las 15:00
                     if (rowTimeMinutes >= toMinutes(14, 15) && rowTimeMinutes < toMinutes(15, 0)) {
                         results.push({
                             originalRow: row,
@@ -160,6 +165,7 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
                     }
                 } else if (isExit) {
                     // End 23:00. Window [23:01 - 23:15]. (15 min después)
+                    // ⚠️ CRITICAL FIX: Solo ajustar si salió DESPUÉS de las 23:00
                     if (rowTimeMinutes > toMinutes(23, 0) && rowTimeMinutes <= toMinutes(23, 15)) {
                         results.push({
                             originalRow: row,

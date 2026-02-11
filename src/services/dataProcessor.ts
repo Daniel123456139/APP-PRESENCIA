@@ -931,16 +931,52 @@ export const generateProcessedData = (
 
                     i = j;
                 } else {
+                    // Entrada huérfana (sin salida)
+                    // ⚠️ NUEVA LÓGICA: Verificar si hay incidencia que justifica hasta fin de jornada
+                    const entryTime = extractTimeHHMM(currentRow.Hora);
+                    const currentDateStr = normalizeDateStr(currentRow.Fecha);
+                    const shiftCode = dailyShiftMap.get(currentDateStr) || currentRow.IDTipoTurno || currentRow.TurnoTexto || 'M';
+                    const shiftBounds = getShiftBoundsMinutes(shiftCode);
+
+                    // Buscar si hay incidencia (salida con motivo) después de esta entrada
+                    let hasJustificationUntilEnd = false;
+                    let justificationEndTime = '??:??';
+
+                    for (let k = i + 1; k < len; k++) {
+                        const futureRow = allRows[k];
+                        if (normalizeDateStr(futureRow.Fecha) !== currentDateStr) break;
+
+                        const futureMotivo = parseInt(futureRow.MotivoAusencia, 10);
+                        // Si hay salida con incidencia (NO es 0, 1 o 14=TAJ)
+                        if (isSalida(futureRow.Entrada) && futureMotivo && futureMotivo !== 1 && futureMotivo !== 14 && futureMotivo !== 0) {
+                            const finStr = normalizeTimeStr(futureRow.Fin || '');
+                            if (finStr && finStr !== '00:00') {
+                                const finMin = toMinutes(finStr);
+                                const shiftEndMin = shiftBounds.end >= shiftBounds.start ? shiftBounds.end : shiftBounds.end + 1440;
+
+                                // Si la incidencia cubre hasta el fin de jornada (tolerancia ±5 min)
+                                if (Math.abs(finMin - (shiftEndMin % 1440)) <= 5) {
+                                    hasJustificationUntilEnd = true;
+                                    justificationEndTime = finStr;
+                                }
+                            }
+                            break;
+                        }
+                    }
+
                     employee.timeSlices.push({
-                        start: extractTimeHHMM(currentRow.Hora),
-                        end: '??:??',
+                        start: entryTime,
+                        end: hasJustificationUntilEnd ? justificationEndTime : '??:??',
                         endIsNextDay: false
                     });
                     sliceFestiveFlags.get(employeeId)?.push(false); // Orphan, doesn't matter
 
-                    const timestamp = `${normalizeDateStr(currentRow.Fecha)} ${extractTimeHHMM(currentRow.Hora)}`;
-                    if (!employee.missingClockOuts.includes(timestamp)) {
-                        employee.missingClockOuts.push(timestamp);
+                    // Solo marcar como missing clock-out si NO hay justificación
+                    if (!hasJustificationUntilEnd) {
+                        const timestamp = `${currentDateStr} ${entryTime}`;
+                        if (!employee.missingClockOuts.includes(timestamp)) {
+                            employee.missingClockOuts.push(timestamp);
+                        }
                     }
                     i++;
                 }
@@ -1093,7 +1129,14 @@ export const generateProcessedData = (
         if (employee.timeSlices.length > 0) {
             const firstSlice = employee.timeSlices[0];
             const lastSlice = employee.timeSlices[employee.timeSlices.length - 1];
-            employee.horarioReal = formatTimeRange(firstSlice.start, lastSlice.end, lastSlice.endIsNextDay);
+
+            // 🔧 FIX: Para empleados flexibles con múltiples días, no mostrar rango consolidado
+            // Solo mostrar rango si hay máximo 2 time slices (1 jornada simple)
+            if (employee.isFlexible && employee.timeSlices.length > 2) {
+                employee.horarioReal = `${employee.timeSlices.length} Intervalos`;
+            } else {
+                employee.horarioReal = formatTimeRange(firstSlice.start, lastSlice.end, lastSlice.endIsNextDay);
+            }
         }
 
         if (shiftCounts.TN > shiftCounts.M) employee.turnoAsignado = 'TN';
@@ -1134,49 +1177,54 @@ export const generateProcessedData = (
         }
 
         // --- Calculate EXCESOS (Time worked outside assigned schedule) ---
-        // Shift M: 07:00 (420m) - 15:00 (900m)
-        // Shift TN: 15:00 (900m) - 23:00 (1380m)
-        let totalExcesoMinutes = 0;
+        // ⚠️ CRITICAL: Empleados FLEXIBLES NO tienen excesos (solo PRESENCIA y TAJ)
+        if (employee.isFlexible) {
+            employee.horasExceso = 0;
+        } else {
+            // Shift M: 07:00 (420m) - 15:00 (900m)
+            // Shift TN: 15:00 (900m) - 23:00 (1380m)
+            let totalExcesoMinutes = 0;
 
-        const shiftStartMin = employee.turnoAsignado === 'TN' ? 900 : 420; // 15:00 vs 07:00
-        const shiftEndMin = employee.turnoAsignado === 'TN' ? 1380 : 900;  // 23:00 vs 15:00
+            const shiftStartMin = employee.turnoAsignado === 'TN' ? 900 : 420; // 15:00 vs 07:00
+            const shiftEndMin = employee.turnoAsignado === 'TN' ? 1380 : 900;  // 23:00 vs 15:00
 
-        const empFlags = sliceFestiveFlags.get(employee.operario) || [];
+            const empFlags = sliceFestiveFlags.get(employee.operario) || [];
 
-        employee.timeSlices.forEach((slice, idx) => {
-            // SKIP IF FESTIVE (User Request: No excess on festive days)
-            if (empFlags[idx]) return;
+            employee.timeSlices.forEach((slice, idx) => {
+                // SKIP IF FESTIVE (User Request: No excess on festive days)
+                if (empFlags[idx]) return;
 
-            let start = toMinutes(slice.start);
-            let end = toMinutes(slice.end);
+                let start = toMinutes(slice.start);
+                let end = toMinutes(slice.end);
 
-            // Handle next day end
-            if (slice.endIsNextDay) end += 1440;
-            // Handle cross-midnight start (extremely rare, but possible if slice started previous day? No, logic processes daily)
+                // Handle next day end
+                if (slice.endIsNextDay) end += 1440;
+                // Handle cross-midnight start (extremely rare, but possible if slice started previous day? No, logic processes daily)
 
-            // Duration of this slice
-            const duration = end - start;
-            if (duration <= 0) return;
+                // Duration of this slice
+                const duration = end - start;
+                if (duration <= 0) return;
 
-            // Calculate Overlap with Schedule
-            // Schedule window for this slice's day
-            // Note: If shift is TN, window is 15:00 - 23:00.
-            // If slice End is Next Day (e.g. 01:00), it means 25:00.
-            // Check overlap [start, end] with [shiftStartMin, shiftEndMin]
+                // Calculate Overlap with Schedule
+                // Schedule window for this slice's day
+                // Note: If shift is TN, window is 15:00 - 23:00.
+                // If slice End is Next Day (e.g. 01:00), it means 25:00.
+                // Check overlap [start, end] with [shiftStartMin, shiftEndMin]
 
-            const overlapStart = Math.max(start, shiftStartMin);
-            const overlapEnd = Math.min(end, shiftEndMin);
+                const overlapStart = Math.max(start, shiftStartMin);
+                const overlapEnd = Math.min(end, shiftEndMin);
 
-            let overlap = 0;
-            if (overlapEnd > overlapStart) {
-                overlap = overlapEnd - overlapStart;
-            }
+                let overlap = 0;
+                if (overlapEnd > overlapStart) {
+                    overlap = overlapEnd - overlapStart;
+                }
 
-            const excess = duration - overlap;
-            if (excess > 0) totalExcesoMinutes += excess;
-        });
+                const excess = duration - overlap;
+                if (excess > 0) totalExcesoMinutes += excess;
+            });
 
-        employee.horasExceso = Math.round((totalExcesoMinutes / 60 + Number.EPSILON) * 100) / 100;
+            employee.horasExceso = Math.round((totalExcesoMinutes / 60 + Number.EPSILON) * 100) / 100;
+        }
 
 
         // Sort shift changes by date
@@ -1356,7 +1404,13 @@ export const generateProcessedData = (
             // so the audit doesn't show 0h worked.
             // Presence is purely calculated from actual work punches (minus TAJ).
             let rawWorkHours = 0;
-            if (employee.turnoAsignado === 'M') {
+
+            // 🔧 FIX: Empleados flexibles pueden trabajar en múltiples franjas
+            if (employee.isFlexible) {
+                // Para flexibles: sumar TODAS las horas trabajadas en cualquier franja
+                // INCLUYE excesoJornada1 para capturar horas fuera de turno estándar (15:00-20:00)
+                rawWorkHours = employee.horasDia + employee.horasTarde + employee.nocturnas + employee.excesoJornada1;
+            } else if (employee.turnoAsignado === 'M') {
                 rawWorkHours = employee.horasDia;
             } else {
                 rawWorkHours = employee.horasTarde;
@@ -1475,7 +1529,14 @@ export const generateProcessedData = (
                                 );
                             }
 
-                            if (!hasActivity && !hasGaps && !hasDeviations && !hasMissingOut && !hasVacation) {
+                            // ⚠️ CRITICAL FIX #2: Verificar si el empleado tiene BAJA MÉDICA activa ese día (ITAT=10 o ITEC=11)
+                            let hasSickLeave = allRows.some(r => {
+                                if (normalizeDateStr(r.Fecha) !== dateStr) return false;
+                                const motivo = parseInt(r.MotivoAusencia, 10);
+                                return motivo === 10 || motivo === 11; // ITAT o ITEC
+                            });
+
+                            if (!hasActivity && !hasGaps && !hasDeviations && !hasMissingOut && !hasVacation && !hasSickLeave) {
                                 employee.absentDays.push(dateStr);
                             }
                         }

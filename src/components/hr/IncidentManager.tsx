@@ -9,11 +9,13 @@ import MultipleAdjustmentModal from './MultipleAdjustmentModal';
 import LateArrivalsModal from './LateArrivalsModal';
 import FreeHoursFilterModal from './FreeHoursFilterModal';
 import FutureIncidentsModal from './FutureIncidentsModal';
-import { getMotivosAusencias } from '../../services/erpApi';
+import { getMotivosAusencias, getCalendarioOperario } from '../../services/erpApi';
+import { fetchFichajes as getFichajes } from '../../services/apiService';
 import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
 import { generateGapStrategy, generateFullDayStrategy, generateWorkdayStrategy } from '../../services/incidentStrategies';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
 import { logIncident as logFirestoreIncident, logSyntheticPunch } from '../../services/firestoreService';
+import { detectIncidentContext, generateIntermediatePunches, generateFullDayPunches } from '../../services/incidentRegistrationService';
 
 export interface EmployeeOption {
     id: number;
@@ -481,7 +483,10 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                         try {
                             const { employeeId, employeeName, startDate, endDate, reasonId, reasonDesc } = data;
 
-                            // Generate all dates in range
+                            // ⚡ NUEVA LÓGICA INTELIGENTE: Usar servicio de fichajes intermedios
+                            console.log(`🔧 [FUTURE INCIDENTS] Procesando incidencia futura para ${employeeName}...`);
+
+                            // Generar rango de fechas
                             const start = new Date(startDate);
                             const end = new Date(endDate);
                             const dates: string[] = [];
@@ -490,51 +495,111 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                                 dates.push(toISODateLocal(d));
                             }
 
-                            // For each date create full day incident (Case 4)
-                            const incidents: Partial<RawDataRow>[] = [];
                             const emp = futureIncidentsEmployees.find(e => e.id === employeeId);
-                            const shift = getShiftBounds('M'); // Default to morning shift
+                            const allIncidents: Partial<RawDataRow>[] = [];
 
+                            // Procesar cada fecha individualmente
                             for (const date of dates) {
-                                const entryRow: Partial<RawDataRow> = {
-                                    IDOperario: employeeId,
-                                    DescOperario: employeeName,
-                                    Fecha: date,
-                                    Hora: shift.start,
-                                    Entrada: 1,
-                                    MotivoAusencia: null,
-                                    DescMotivoAusencia: '',
-                                    DescDepartamento: emp?.department || '',
-                                    IDControlPresencia: 0,
-                                    Computable: 'Sí',
-                                    TipoDiaEmpresa: 0,
-                                    TurnoTexto: 'M'
-                                };
+                                // 1. Obtener fichajes existentes de ese día
+                                const existingPunches = await getFichajes(date, date, employeeId.toString());
 
-                                const exitRow: Partial<RawDataRow> = {
-                                    IDOperario: employeeId,
-                                    DescOperario: employeeName,
-                                    Fecha: date,
-                                    Hora: shift.end,
-                                    Entrada: 0,
-                                    MotivoAusencia: reasonId,
-                                    DescMotivoAusencia: reasonDesc,
-                                    DescDepartamento: emp?.department || '',
-                                    IDControlPresencia: 0,
-                                    Computable: 'No',
-                                    TipoDiaEmpresa: 0,
-                                    TurnoTexto: 'M'
-                                };
+                                // 2. Obtener horario del empleado
+                                const calendario = await getCalendarioOperario(employeeId.toString(), date, date);
+                                const daySchedule = calendario?.find(c => c.Fecha === date);
 
-                                incidents.push(entryRow, exitRow);
+                                if (!daySchedule?.Inicio || !daySchedule?.Fin) {
+                                    console.warn(`⚠️ Sin horario para ${employeeName} el ${date}, usando M por defecto`);
+                                }
+
+                                const shiftStart = daySchedule?.Inicio || '07:00:00';
+                                const shiftEnd = daySchedule?.Fin || '15:00:00';
+                                const turno = daySchedule?.IDTipoTurno || 'M';
+
+                                // 3. Detectar contexto (intermedio, día completo, tardío, etc.)
+                                const context = detectIncidentContext(
+                                    date,
+                                    existingPunches,
+                                    { start: shiftStart.substring(0, 5), end: shiftEnd.substring(0, 5) }
+                                );
+
+                                console.log(`📊 [${date}] Contexto: ${context.type}, Fichajes: ${context.existingPunches.length}`);
+
+                                let dailyPunches;
+
+                                // 4. Generar fichajes según contexto
+                                if (context.type === 'full_day') {
+                                    // Día completo sin fichajes
+                                    dailyPunches = generateFullDayPunches({
+                                        employeeId: employeeId.toString(),
+                                        employeeName,
+                                        date,
+                                        shiftStart: shiftStart.substring(0, 5),
+                                        shiftEnd: shiftEnd.substring(0, 5),
+                                        motivo: reasonId,
+                                        motivoDesc: reasonDesc,
+                                        turno,
+                                        department: emp?.department || ''
+                                    });
+                                } else {
+                                    // Caso por defecto: día completo (para incidencias futuras planificadas)
+                                    dailyPunches = generateFullDayPunches({
+                                        employeeId: employeeId.toString(),
+                                        employeeName,
+                                        date,
+                                        shiftStart: shiftStart.substring(0, 5),
+                                        shiftEnd: shiftEnd.substring(0, 5),
+                                        motivo: reasonId,
+                                        motivoDesc: reasonDesc,
+                                        turno,
+                                        department: emp?.department || ''
+                                    });
+                                }
+
+                                // Convertir a Partial<RawDataRow>
+                                const convertedPunches = dailyPunches.map(p => ({
+                                    IDOperario: parseInt(p.IDOperario),
+                                    DescOperario: p.DescOperario,
+                                    Fecha: p.Fecha,
+                                    Hora: p.Hora,
+                                    Entrada: p.Entrada,
+                                    MotivoAusencia: p.MotivoAusencia,
+                                    DescMotivoAusencia: p.DescMotivoAusencia,
+                                    DescDepartamento: p.DescDepartamento,
+                                    IDControlPresencia: 0,
+                                    Computable: p.Entrada === 1 ? 'Sí' : 'No',
+                                    TipoDiaEmpresa: 0,
+                                    TurnoTexto: p.TurnoTexto,
+                                    Inicio: p.Inicio,
+                                    Fin: p.Fin,
+                                    GeneradoPorApp: true
+                                } as Partial<RawDataRow>));
+
+                                allIncidents.push(...convertedPunches);
                             }
 
-                            await addIncidents(incidents as RawDataRow[], `Future Incidents: ${reasonDesc}`);
-                            showNotification(`Incidencias futuras registradas: ${dates.length} día(s) para ${employeeName}`, 'success');
+                            // 5. Guardar todos los fichajes
+                            await addIncidents(allIncidents as RawDataRow[], `Incidencia Futura: ${reasonDesc}`);
+
+                            // 6. Log en Firestore para auditoría
+                            for (const incident of allIncidents) {
+                                if (incident.IDOperario) {
+                                    await logSyntheticPunch({
+                                        employeeId: incident.IDOperario.toString(),
+                                        date: incident.Fecha || '',
+                                        time: incident.Hora || '',
+                                        reasonId: incident.MotivoAusencia || null,
+                                        reasonDesc: incident.DescMotivoAusencia || '',
+                                        direction: incident.Entrada ? 'Entrada' : 'Salida'
+                                    }).catch(err => console.error('⚠️ Error logging to Firestore:', err));
+                                }
+                            }
+
+                            showNotification(`✅ Incidencias futuras registradas: ${dates.length} día(s) para ${employeeName}`, 'success');
+                            console.log(`✅ [FUTURE INCIDENTS] ${allIncidents.length} fichajes creados correctamente`);
                             onRefreshNeeded();
                         } catch (error: unknown) {
                             if (error instanceof Error) {
-                                console.error('Error saving future incidents:', error.message);
+                                console.error('❌ [FUTURE INCIDENTS] Error:', error.message);
                                 showNotification(`Error: ${error.message}`, 'error');
                             }
                         }
