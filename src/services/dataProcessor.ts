@@ -248,7 +248,8 @@ export const generateProcessedData = (
 
         // --- PRE-CALCULAR INTERVALOS JUSTIFICADOS DEL DÍA ---
         // Necesitamos esto para que la detección de retrasos ignore tiempos ya cubiertos por una incidencia.
-        const dailyJustifications = new Map<string, { start: number, end: number }[]>();
+        // FIX: Store motivoId to allow specific subtraction later
+        const dailyJustifications = new Map<string, { start: number, end: number, motivoId: number }[]>();
         allRows.forEach(r => {
             const ma = getMotivoAusencia(r.MotivoAusencia);
             if (isSalida(r.Entrada) && ma !== null && ma !== 1 && ma !== 14 && ma !== 0) {
@@ -259,7 +260,7 @@ export const generateProcessedData = (
                     const e = toMinutes(fin);
                     const dateKey = normalizeDateStr(r.Fecha);
                     if (!dailyJustifications.has(dateKey)) dailyJustifications.set(dateKey, []);
-                    dailyJustifications.get(dateKey)!.push({ start: s, end: e });
+                    dailyJustifications.get(dateKey)!.push({ start: s, end: e, motivoId: ma });
                 }
             }
         });
@@ -371,14 +372,12 @@ export const generateProcessedData = (
                 // manual 'shifts' param are assignments, they don't have start/end times.
                 const assignedShift = SHIFT_SPECS.find(s => s.code === currentShiftCode);
 
-                // 🔍 DEBUG MARIO (047)
+                // 🔍 DEBUG MARIO (047) - REMOVED FOR CLEANUP
+                /*
                 if (employeeId === 47 && currentDateStr === '2026-01-16') {
-                    console.log('🐞 MARIO DEBUG ENTRY:', {
-                        shiftCode: currentShiftCode,
-                        shiftStart: assignedShift?.start,
-                        isFirstEntry: (!allRows[i - 1] || normalizeDateStr(allRows[i - 1].Fecha) !== currentDateStr)
-                    });
+                    // console.log removed
                 }
+                */
 
                 // --- DETECCIÓN DE RETRASO INICIAL (GAP AL COMIENZO) ---
                 // Si es la PRIMERA entrada del día de este empleado y llega tarde (> 10 min) respecto al turno
@@ -410,10 +409,12 @@ export const generateProcessedData = (
                                 // originPunchId eliminado intencionalmente para Caso 2
                             });
 
-                            // Log debug if Mario
+                            // Log debug if Mario - REMOVED FOR CLEANUP
+                            /*
                             if (employeeId === 47) {
-                                console.log('🚨 MARIO DETECTED GAP (Caso 2 - Entrada tardía):', { start: assignedShift.start, end: currentHoraStr });
+                                // console.log removed
                             }
+                            */
                         }
                     }
                 }
@@ -569,25 +570,19 @@ export const generateProcessedData = (
                             // In the specific bug case (Entry 11:56, Justified until 11:57), the user considers 8.02h wrong.
                             // Subtracting overlap ensures 8.00h.
 
-                            const presenceStartMin = effectiveStart.getHours() * 60 + effectiveStart.getMinutes();
-                            const presenceEndMin = effectiveEnd.getHours() * 60 + effectiveEnd.getMinutes();
-                            const justifications = dailyJustifications.get(currentDateStr) || [];
 
-                            let overlapMins = 0;
-                            justifications.forEach(j => {
-                                const oStart = Math.max(presenceStartMin, j.start);
-                                const oEnd = Math.min(presenceEndMin, j.end);
-                                if (oEnd > oStart) {
-                                    overlapMins += (oEnd - oStart);
-                                }
-                            });
 
-                            if (overlapMins > 0) {
-                                const overlapHours = overlapMins / 60;
-                                // Reducimos la duración efectiva de presencia para evitar doble conteo
-                                durationHours = Math.max(0, durationHours - overlapHours);
-                                // Optional: Log warning if significant?
-                            }
+                            // 🛑 CRITICAL FIX REVISION: REMOVE OVERLAP SUBTRACTION COMPLETELY
+                            // User Feedback: "Nunca debería haber solapamiento".
+                            // Analysis: The `dailyJustifications` map might contain broad ranges (e.g. 07-15) from metadata,
+                            // while the actual punches define narrow, non-overlapping intervals (e.g. 08-12 Justified, 14-15 Work).
+                            // Subtracting overlap (either from Work or Justification) penalizes the user for 'Ghost Ranges'.
+                            // DECISION: Work is Work (TimeSlices). Joined Justifications are Justifications. 
+                            // We trust the Loop's disjoint processing. Double counting is rare and less harmful than processing ghosts.
+
+
+                            // We do NOT subtract from durationHours anymore.
+                            // durationHours = Math.max(0, durationHours - totalOverlap); <-- REMOVED
 
                             const currentDayTotal = dailyHoursMap.get(currentDateStr) || 0;
                             dailyHoursMap.set(currentDateStr, currentDayTotal + durationHours);
@@ -946,7 +941,7 @@ export const generateProcessedData = (
                         const futureRow = allRows[k];
                         if (normalizeDateStr(futureRow.Fecha) !== currentDateStr) break;
 
-                        const futureMotivo = parseInt(futureRow.MotivoAusencia, 10);
+                        const futureMotivo = futureRow.MotivoAusencia;
                         // Si hay salida con incidencia (NO es 0, 1 o 14=TAJ)
                         if (isSalida(futureRow.Entrada) && futureMotivo && futureMotivo !== 1 && futureMotivo !== 14 && futureMotivo !== 0) {
                             const finStr = normalizeTimeStr(futureRow.Fin || '');
@@ -1532,7 +1527,7 @@ export const generateProcessedData = (
                             // ⚠️ CRITICAL FIX #2: Verificar si el empleado tiene BAJA MÉDICA activa ese día (ITAT=10 o ITEC=11)
                             let hasSickLeave = allRows.some(r => {
                                 if (normalizeDateStr(r.Fecha) !== dateStr) return false;
-                                const motivo = parseInt(r.MotivoAusencia, 10);
+                                const motivo = r.MotivoAusencia;
                                 return motivo === 10 || motivo === 11; // ITAT o ITEC
                             });
 
