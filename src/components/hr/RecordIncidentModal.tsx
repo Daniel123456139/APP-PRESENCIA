@@ -40,6 +40,11 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
     // Track previous isOpen to detect opening transition
     const prevIsOpenRef = React.useRef(isOpen);
 
+    // --- MANUAL MODE STATE ---
+    const [isManualMode, setIsManualMode] = useState(false);
+    const [manualDate, setManualDate] = useState<string>('');
+
+
     const getShiftBounds = (shiftCode: string): { start: string; end: string } => {
         if (shiftCode === 'TN' || shiftCode === 'T') return { start: '15:00', end: '23:00' };
         if (shiftCode === 'N') return { start: '23:00', end: '07:00' };
@@ -82,16 +87,20 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
 
         const gapIncidents: IncidentToJustify[] = (employeeData.unjustifiedGaps || [])
             .map((gap, i): IncidentToJustify | null => {
-                // Fix: Display GAP start as 1 minute after punch out to avoid overlap perception
-                // User requirement: "si se va a las 8:30, incidencia de 8:31 a 10"
-                const adjustedStart = addOneMinute(gap.start);
+                const shiftCode = getShiftCodeForDate(gap.date);
+                const shiftBounds = getShiftBounds(shiftCode);
+
+                // Fix: Display GAP start as 1 minute after punch out ONLY IF it's NOT the start of the shift
+                // User requirement: "si se va a las 8:30, incidencia de 8:31 a 10" -> Apply +1
+                // Late Arrival: "15:00 -> 16:00" -> DO NOT Apply +1 (Must start at 15:00)
+                let adjustedStart = gap.start;
+                if (gap.start !== shiftBounds.start) {
+                    adjustedStart = addOneMinute(gap.start);
+                }
 
                 // FIX #1: Include BOTH start AND end time to allow multiple gaps on same day
                 const uniqueKey = `gap-${employeeData.operario}-${gap.date}-${gap.start}-${gap.end}`;
                 if (keysToCheck.has(uniqueKey)) return null;
-
-                const shiftCode = getShiftCodeForDate(gap.date);
-                const shiftBounds = getShiftBounds(shiftCode);
 
                 return {
                     type: 'gap',
@@ -205,6 +214,8 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
             setMotivoId('');
             setError('');
             setIsSaving(false);
+            setIsManualMode(false); // Reset manual mode on open
+            setManualDate(new Date().toISOString().split('T')[0]); // Default to today or safely handle in render
         }
         // If incidents change while open (e.g. one justified), ensure existing selection is valid
         if (isOpen && prevIsOpenRef.current && incidents.length > 0) {
@@ -239,17 +250,29 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
         // Usar la estrategia centralizada para generar las filas exactas
         let strategyResult;
 
-        if (selectedIncident.type === 'gap') {
-            const gapData = selectedIncident.data as UnjustifiedGap;
-            strategyResult = generateGapStrategy(gapData, reason, employeeData);
-        } else if (selectedIncident.type === 'workday') {
-            const workdayData = selectedIncident.data as WorkdayDeviation;
-            strategyResult = generateWorkdayStrategy(workdayData, reason, employeeData);
-        } else if (selectedIncident.type === 'absentDay') {
-            const { date } = selectedIncident.data as { date: string };
-            strategyResult = generateFullDayStrategy(date, reason, employeeData);
+        if (isManualMode) {
+            // MANUAL MODE LOGIQUE
+            if (!manualDate) {
+                setError('Debes seleccionar una fecha.');
+                return;
+            }
+            strategyResult = generateFullDayStrategy(manualDate, reason, employeeData);
         } else {
-            return; // Should not happen
+            // STANDARD MODE LOGIC
+            if (!selectedIncident) return;
+
+            if (selectedIncident.type === 'gap') {
+                const gapData = selectedIncident.data as UnjustifiedGap;
+                strategyResult = generateGapStrategy(gapData, reason, employeeData);
+            } else if (selectedIncident.type === 'workday') {
+                const workdayData = selectedIncident.data as WorkdayDeviation;
+                strategyResult = generateWorkdayStrategy(workdayData, reason, employeeData);
+            } else if (selectedIncident.type === 'absentDay') {
+                const { date } = selectedIncident.data as { date: string };
+                strategyResult = generateFullDayStrategy(date, reason, employeeData);
+            } else {
+                return; // Should not happen
+            }
         }
 
         // Combinar inserts y updates para validar
@@ -360,32 +383,63 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                             <p className="font-semibold text-slate-800">{employeeData.nombre}</p>
                         </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700">1. Selecciona la incidencia a justificar</label>
-                            {incidents.length > 0 ? (
-                                <div className="mt-2 space-y-2 max-h-40 overflow-y-auto border rounded-md p-2 bg-slate-50">
-                                    {incidents.map(inc => (
-                                        <label key={inc.key} className="flex items-center p-2 rounded-md bg-white hover:bg-blue-50 cursor-pointer border border-slate-100">
-                                            <input
-                                                type="radio"
-                                                name="incident"
-                                                value={inc.key}
-                                                checked={selectedIncidentKey === inc.key}
-                                                onChange={(e) => setSelectedIncidentKey(e.target.value)}
-                                                disabled={isSaving}
-                                                className="h-4 w-4 text-blue-600 border-slate-300 focus:ring-blue-500"
-                                            />
-                                            <span className="ml-3 text-sm text-slate-700">{inc.description}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="mt-2 p-4 bg-green-50 text-green-700 rounded-md text-sm text-center border border-green-200">
-                                    <p className="font-semibold">¡Todo al día!</p>
-                                    <p>No quedan incidencias pendientes para este empleado.</p>
-                                </div>
-                            )}
+                        {/* TOGGLE MANUAL MODE */}
+                        <div className="flex justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setIsManualMode(!isManualMode)}
+                                className="text-sm text-blue-600 hover:text-blue-800 underline"
+                            >
+                                {isManualMode ? 'Volver a Incidencias Detectadas' : 'Registrar Ausencia Manualmente'}
+                            </button>
                         </div>
+
+                        {isManualMode ? (
+                            <div className="bg-orange-50 p-4 rounded-md border border-orange-200 space-y-3">
+                                <h3 className="font-semibold text-orange-800 flex items-center">
+                                    <span className="mr-2">⚡</span> Modo Manual
+                                </h3>
+                                <div>
+                                    <label className="block text-sm font-medium text-orange-800 mb-1">Fecha de la Ausencia</label>
+                                    <input
+                                        type="date"
+                                        value={manualDate}
+                                        onChange={(e) => setManualDate(e.target.value)}
+                                        className="block w-full border-orange-300 rounded-md focus:ring-orange-500 focus:border-orange-500"
+                                    />
+                                    <p className="text-xs text-orange-600 mt-1">
+                                        Se registrará una ausencia de día completo (Entrada Normal ➔ Salida con Incidencia).
+                                    </p>
+                                </div>
+                            </div>
+                        ) : (
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700">1. Selecciona la incidencia a justificar</label>
+                                {incidents.length > 0 ? (
+                                    <div className="mt-2 space-y-2 max-h-40 overflow-y-auto border rounded-md p-2 bg-slate-50">
+                                        {incidents.map(inc => (
+                                            <label key={inc.key} className="flex items-center p-2 rounded-md bg-white hover:bg-blue-50 cursor-pointer border border-slate-100">
+                                                <input
+                                                    type="radio"
+                                                    name="incident"
+                                                    value={inc.key}
+                                                    checked={selectedIncidentKey === inc.key}
+                                                    onChange={(e) => setSelectedIncidentKey(e.target.value)}
+                                                    disabled={isSaving}
+                                                    className="h-4 w-4 text-blue-600 border-slate-300 focus:ring-blue-500"
+                                                />
+                                                <span className="ml-3 text-sm text-slate-700">{inc.description}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="mt-2 p-4 bg-green-50 text-green-700 rounded-md text-sm text-center border border-green-200">
+                                        <p className="font-semibold">¡Todo al día!</p>
+                                        <p>No quedan incidencias pendientes para este empleado.</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         <div>
                             <div className="flex justify-between items-center mb-1">
@@ -404,7 +458,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                                 id="motivo-select"
                                 value={motivoId}
                                 onChange={(e) => setMotivoId(e.target.value)}
-                                disabled={!selectedIncidentKey || incidents.length === 0 || isSaving || loading}
+                                disabled={(!isManualMode && (!selectedIncidentKey || incidents.length === 0)) || isSaving || loading}
                                 className="mt-1 block w-full pl-3 pr-10 py-2 border-slate-300 rounded-md disabled:bg-slate-200"
                             >
                                 <option value="">-- Selecciona un motivo --</option>
@@ -436,7 +490,9 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                                         const dummyReason = { id: 99, desc: 'Preview' }; // Dummy reason for time calc
                                         let result;
 
-                                        if (selectedIncident.type === 'gap') {
+                                        if (isManualMode && manualDate) {
+                                            result = generateFullDayStrategy(manualDate, dummyReason, employeeData);
+                                        } else if (selectedIncident.type === 'gap') {
                                             const gapData = selectedIncident.data as UnjustifiedGap;
                                             result = generateGapStrategy(gapData, dummyReason, employeeData);
                                         } else if (selectedIncident.type === 'absentDay') {
@@ -496,7 +552,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                         <button
                             type="button"
                             onClick={handleSubmit}
-                            disabled={!motivoId || incidents.length === 0 || isSaving}
+                            disabled={!motivoId || (!isManualMode && incidents.length === 0) || isSaving}
                             className="px-5 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed flex items-center min-w-[120px] justify-center"
                         >
                             {isSaving ? (

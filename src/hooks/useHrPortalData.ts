@@ -3,7 +3,7 @@ import { RawDataRow, ProcessedDataRow, Role, Shift, SickLeave, CompanyHoliday, B
 import { useErpDataState, useErpDataActions } from '../store/erpDataStore';
 import { useNotification } from '../components/shared/NotificationContext';
 import { fetchFichajes, fetchFichajesBatched } from '../services/apiService';
-import { fetchSyntheticPunches, SyntheticPunchParams } from '../services/firestoreService';
+import { fetchSyntheticPunches, SyntheticPunchParams, deleteSyntheticPunch } from '../services/firestoreService';
 import { CalendarioDia, getCalendarioEmpresa, getCalendarioOperario } from '../services/erpApi';
 import { groupRawDataToLeaves } from '../services/leaveService';
 import { SickLeaveMetadataService } from '../services/sickLeaveMetadataService';
@@ -11,6 +11,7 @@ import { useAutoRefresh } from './useAutoRefresh';
 import { useOperarios } from './useErp';
 import { useProcessDataWorker } from './useProcessDataWorker';
 import { processData } from '../services/dataProcessor';
+import { SyncService } from '../services/syncService';
 import { exportDetailedIncidenceToXlsx } from '../services/exports/detailedIncidenceExportService';
 import { exportFreeHoursToXlsx } from '../services/exports/freeHoursExportService';
 import { toISODateLocal } from '../utils/localDate';
@@ -33,7 +34,7 @@ export interface UseHrPortalDataProps {
 // Analysis Range matches Calendar Days.
 
 const LOGICAL_START_TIME = '06:00'; // Start of early shift
-const LOGICAL_END_TIME = '09:00';   // End of NEXT day margin for night shift
+const LOGICAL_END_TIME = '03:00';   // End of NEXT day margin for overtime
 
 export const useHrPortalData = ({
     startDate,
@@ -50,7 +51,7 @@ export const useHrPortalData = ({
     const { erpData, lastUpdated: erpLastUpdated } = useErpDataState();
     const { setErpData } = useErpDataActions();
     const { showNotification } = useNotification();
-    const { operarios } = useOperarios(true);
+    const { operarios } = useOperarios(false);
 
     const [isReloading, setIsReloading] = useState(false);
     const [activeSickLeavesRaw, setActiveSickLeavesRaw] = useState<RawDataRow[]>([]);
@@ -111,6 +112,13 @@ export const useHrPortalData = ({
 
         const start = new Date(`${appliedRange.startDate}T${startTimeValue}:00`);
         const end = new Date(`${appliedRange.endDate}T${endTimeValue}:59`);
+
+        if (appliedRange.startDate === appliedRange.endDate && endTimeValue === '23:59') {
+            const [endHour, endMinute] = LOGICAL_END_TIME.split(':').map(Number);
+            end.setDate(end.getDate() + 1);
+            end.setHours(endHour || 0, endMinute || 0, 0, 0);
+        }
+
         return { start, end };
     }, [appliedRange, appliedRangeDays]);
 
@@ -185,6 +193,66 @@ export const useHrPortalData = ({
 
         return () => { cancelled = true; };
     }, [appliedRange.startDate, appliedRange.endDate, erpLastUpdated]); // Refetch when ERP updates too, to keep in sync if needed
+
+    // AUTO-CLEANUP: Stricter "Zombie" Killer
+    // If Synthetic Punch exists in loaded range/employees AND is NOT in ERP AND is NOT in Queue -> DELETE
+    useEffect(() => {
+        let mounted = true;
+
+        const performCleanup = async () => {
+            if (syntheticPunches.size > 0 && erpData.length > 0 && !isFetchingSynthetic && !isReloading) {
+                // Fetch Queue to ensure we don't delete pending items
+                const queue = await SyncService.getQueue();
+                const punchesToDelete: string[] = [];
+
+                syntheticPunches.forEach((punch, key) => {
+                    // Match with ERP Data
+                    const existsInErp = erpData.some(row =>
+                        row.IDOperario.toString() === punch.employeeId &&
+                        row.Fecha.split('T')[0] === punch.date &&
+                        (row.Hora.substring(0, 5) === punch.time.substring(0, 5) ||
+                            (row.Inicio && row.Inicio.substring(0, 5) === punch.time.substring(0, 5)))
+                    );
+
+                    if (existsInErp) {
+                        // Case A: It's in ERP. So we don't need the synthetic copy anymore.
+                        punchesToDelete.push(key);
+                    } else {
+                        // Case B: It is NOT in ERP.
+                        // Is it Pending in Queue?
+                        const inQueue = queue.some(q => {
+                            if (q.type !== 'INSERT_FICHAJE') return false;
+                            const payload = q.payload as RawDataRow;
+                            // Weak match on payload using string conversion
+                            return String(payload.IDOperario) === punch.employeeId &&
+                                payload.Fecha === punch.date &&
+                                (payload.Hora && payload.Hora.startsWith(punch.time));
+                        });
+
+                        if (!inQueue) {
+                            // It is NOT in ERP, and NOT in Queue. It's a Zombie.
+                            punchesToDelete.push(key);
+                        }
+                    }
+                });
+
+                if (punchesToDelete.length > 0 && mounted) {
+                    console.log(`🧹 [ZombieKiller] Removing ${punchesToDelete.length} punches (Synced or Deleted).`);
+                    punchesToDelete.forEach(key => deleteSyntheticPunch(key));
+
+                    setSyntheticPunches(prev => {
+                        const next = new Map(prev);
+                        punchesToDelete.forEach(k => next.delete(k));
+                        return next;
+                    });
+                }
+            }
+        };
+
+        performCleanup();
+
+        return () => { mounted = false; };
+    }, [syntheticPunches, erpData, isFetchingSynthetic, isReloading]);
 
     const employeeOptions = useMemo(() => {
         return operarios.map(op => ({
@@ -332,17 +400,24 @@ export const useHrPortalData = ({
 
         // Agrupar filas raw en rangos lógicos
         const leaves = groupRawDataToLeaves(activeSickLeavesRaw);
-        const todayStr = toISODateLocal(new Date());
+
+        const rangeStartStr = appliedRange.startDate;
+        const rangeEndStr = appliedRange.endDate;
+
+        const overlapsRange = (leaveStart: string, leaveEnd?: string | null) => {
+            if (!leaveStart) return false;
+            if (leaveStart > rangeEndStr) return false;
+            if (!leaveEnd) return true;
+            return leaveEnd >= rangeStartStr && leaveStart <= rangeEndStr;
+        };
 
         leaves.forEach(l => {
             if (l.motivoId === 10 || l.motivoId === 11) {
                 // Verificar metadatos de cierre
                 const meta = SickLeaveMetadataService.get(l.employeeId, l.startDate);
+                const leaveEnd = meta?.dischargeDate || l.endDate || null;
 
-                // Una baja es ACTIVA si NO tiene fecha de alta O la fecha de alta es futura
-                const isActive = !meta?.dischargeDate || meta.dischargeDate > todayStr;
-
-                if (isActive) {
+                if (overlapsRange(l.startDate, leaveEnd)) {
                     sickLeaveEmployeeIds.add(l.employeeId);
                 }
             }
@@ -376,6 +451,35 @@ export const useHrPortalData = ({
             }
             rangeIter.setDate(rangeIter.getDate() + 1);
         }
+
+        const buildFallbackAbsentDays = (employeeId: number) => {
+            const fallback: string[] = [];
+            const iter = new Date(appliedStartDate);
+            const endDateObj = new Date(appliedEndDate);
+
+            while (iter <= endDateObj) {
+                const dateStr = toISODateLocal(iter);
+                const dayOfWeek = iter.getDay();
+                const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                const isHoliday = companyHolidaySet.has(dateStr);
+
+                let isVacation = false;
+                const empCal = employeeCalendarMap.get(employeeId);
+                if (empCal && empCal.get(dateStr) === 2) {
+                    isVacation = true;
+                }
+                if (!isVacation && vacationLookup.get(`${employeeId}:${dateStr}`)) {
+                    isVacation = true;
+                }
+
+                if (!isWeekend && !isHoliday && !isVacation) {
+                    fallback.push(dateStr);
+                }
+                iter.setDate(iter.getDate() + 1);
+            }
+
+            return fallback;
+        };
 
         processed.forEach(p => {
             // NUEVA REGLA: Excluir empleados con bajas médicas de TODAS las tablas
@@ -431,6 +535,12 @@ export const useHrPortalData = ({
 
             // Logic for Tables:
             if (isTotalAbsence) {
+                if (!p.absentDays || p.absentDays.length === 0) {
+                    const fallbackAbsentDays = buildFallbackAbsentDays(p.operario);
+                    if (fallbackAbsentDays.length > 0) {
+                        p.absentDays = fallbackAbsentDays;
+                    }
+                }
                 if (!hasWorkingDayInRange) {
                     resumen.push(p);
                     return;
@@ -835,6 +945,18 @@ const mergeSyntheticData = (
     const employeeLookup = new Map(employeeOptions.map(op => [op.id, op]));
 
     syntheticPunches.forEach((punch, key) => {
+        // DUPLICATE CHECK: If it exists in baseData, skip it!
+        // This prevents double display of punches that are already synced but not yet cleaned up
+        const exists = baseData.some(row =>
+            row.IDOperario.toString() === punch.employeeId &&
+            row.Fecha.split('T')[0] === punch.date &&
+            (
+                (row.Hora && row.Hora.substring(0, 5) === punch.time.substring(0, 5)) ||
+                (row.Inicio && row.Inicio.substring(0, 5) === punch.time.substring(0, 5))
+            )
+        );
+        if (exists) return;
+
         const empId = parseInt(punch.employeeId, 10);
         const employee = employeeLookup.get(empId);
 

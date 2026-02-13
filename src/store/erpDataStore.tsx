@@ -6,6 +6,7 @@ import { generateRowsFromRange } from '../services/leaveService';
 import { AuditService } from '../services/AuditService';
 import { toISODateLocal } from '../utils/localDate';
 import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
+import { deleteSyntheticPunchesInRange } from '../services/firestoreService';
 
 // --- Estado ---
 interface ErpDataState {
@@ -252,6 +253,13 @@ export const useErpDataActions = () => {
 
             if (!result.success && !result.queued) {
                 throw new Error(result.message);
+            }
+
+            // CLEANUP: Delete any synthetic punches for this range/employee to avoid Zombies
+            try {
+                await deleteSyntheticPunchesInRange(range.employeeId, range.startDate, range.endDate);
+            } catch (err) {
+                console.warn("⚠️ Failed to cleanup synthetic punches:", err);
             }
 
             // Eliminamos de UI tanto si éxito como si encolado

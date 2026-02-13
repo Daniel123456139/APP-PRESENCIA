@@ -5,7 +5,6 @@ import HrLayout from './components/hr/HrLayout';
 import HrDashboardPage from './components/hr/pages/HrDashboardPage';
 import {
     HrCalendarPage,
-    HrSickLeavesPage,
     HrVacationsPage,
     HrHistoryPage,
     HrProfilesPage,
@@ -107,6 +106,25 @@ const MainRoutes: React.FC = () => {
             window.removeEventListener('offline', handleOffline);
         };
     }, [showNotification]);
+
+    // 🟢 SYNCHRONIZATION POLLING (Every 60s)
+    useEffect(() => {
+        if (!globalFilterState || !currentUser) return;
+
+        const intervalId = setInterval(() => {
+            if (navigator.onLine) {
+                console.log("🔄 [AutoSync] Refreshing data...");
+                executeDataLoad(
+                    globalFilterState.startDate,
+                    globalFilterState.endDate,
+                    globalFilterState.startTime,
+                    globalFilterState.endTime
+                ).catch(err => console.error("AutoSync failed:", err));
+            }
+        }, 60000); // 60 seconds
+
+        return () => clearInterval(intervalId);
+    }, [globalFilterState, currentUser]); // Dependency ensures restart if filter changes
 
     useEffect(() => {
         let cancelled = false;
@@ -267,7 +285,7 @@ const MainRoutes: React.FC = () => {
                         <Route path="dashboard" element={<HrDashboardPage />} />
                         <Route path="jobs" element={<HrJobsPage />} />
                         <Route path="history" element={<HrHistoryPage />} />
-                        <Route path="sickleaves" element={<HrSickLeavesPage />} />
+
 
                         <Route path="vacations" element={<HrVacationsPage />} />
                         <Route path="calendar" element={<HrCalendarPage />} />

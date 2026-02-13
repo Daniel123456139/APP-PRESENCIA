@@ -70,10 +70,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
             return;
         }
 
-        if (startDate < today) {
-            alert('La fecha de inicio debe ser igual o posterior a hoy.');
-            return;
-        }
+
 
         if (endDate < startDate) {
             alert('La fecha de fin debe ser igual o posterior a la fecha de inicio.');
@@ -127,7 +124,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                         </svg>
-                        Registrar Incidencias Futuras
+                        Registrar Incidencia por Periodo
                     </h2>
                     <button onClick={handleClose} className="text-slate-400 hover:text-slate-600 transition-colors">
                         <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -139,7 +136,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                 <form onSubmit={handleSubmit} className="p-6 space-y-6">
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                         <p className="text-sm text-blue-800">
-                            <strong>Nota:</strong> Esta funcionalidad permite registrar ausencias planificadas para fechas futuras (vacaciones aprobadas, citas médicas programadas, etc.).
+                            <strong>Nota:</strong> Esta funcionalidad permite registrar incidencias para un periodo de tiempo (pasado o futuro), como vacaciones, bajas médicas o permisos.
                         </p>
                     </div>
 
@@ -229,7 +226,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                             <input
                                 type="date"
                                 value={startDate}
-                                min={today}
+                                min="2020-01-01"
                                 onChange={(e) => setStartDate(e.target.value)}
                                 className="w-full rounded-md border-slate-300 shadow-sm focus:border-red-500 focus:ring-red-500"
                                 required
@@ -243,7 +240,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                             <input
                                 type="date"
                                 value={endDate}
-                                min={startDate || today}
+                                min={startDate || "2020-01-01"}
                                 onChange={(e) => setEndDate(e.target.value)}
                                 className="w-full rounded-md border-slate-300 shadow-sm focus:border-red-500 focus:ring-red-500"
                                 required
@@ -291,7 +288,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                             disabled={!selectedEmployeeId || motivos.length === 0}
                             className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium shadow-sm disabled:bg-slate-300 disabled:cursor-not-allowed"
                         >
-                            Registrar Incidencia Futura
+                            Registrar Incidencia
                         </button>
                     </div>
                 </form>

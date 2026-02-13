@@ -276,20 +276,22 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
             }
 
             // Save to Database/ERP
-            await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], desc);
+            const result = await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], desc);
 
-            // Logging Synthetic Punches to Firestore
-            const newRows = [entryRow, exitRow];
-            for (const row of newRows) {
-                if (row.GeneradoPorApp && row.IDOperario) {
-                    await logSyntheticPunch({
-                        employeeId: row.IDOperario.toString(),
-                        date: row.Fecha || '',
-                        time: row.Hora || '',
-                        reasonId: row.MotivoAusencia || null,
-                        reasonDesc: row.DescMotivoAusencia || '',
-                        direction: row.Entrada ? 'Entrada' : 'Salida'
-                    });
+            // Logging Synthetic Punches to Firestore ONLY IF QUEUED
+            if (result.queuedCount > 0) {
+                const newRows = [entryRow, exitRow];
+                for (const row of newRows) {
+                    if (row.GeneradoPorApp && row.IDOperario) {
+                        await logSyntheticPunch({
+                            employeeId: row.IDOperario.toString(),
+                            date: row.Fecha || '',
+                            time: row.Hora || '',
+                            reasonId: row.MotivoAusencia || null,
+                            reasonDesc: row.DescMotivoAusencia || '',
+                            direction: row.Entrada ? 'Entrada' : 'Salida'
+                        });
+                    }
                 }
             }
 
@@ -346,20 +348,22 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
 
             // 2. Ejecutar Acciones (Inserts y Updates)
             if (strategyResult.rowsToInsert.length > 0) {
-                await addIncidents(strategyResult.rowsToInsert as RawDataRow[], strategyResult.description);
+                const result = await addIncidents(strategyResult.rowsToInsert as RawDataRow[], strategyResult.description);
                 didSave = true;
 
-                // LOGGING SYNTHETIC PUNCHES TO FIRESTORE (SIDECAR)
-                for (const row of strategyResult.rowsToInsert) {
-                    if (row.GeneradoPorApp && row.IDOperario) {
-                        await logSyntheticPunch({
-                            employeeId: row.IDOperario.toString(),
-                            date: row.Fecha || '',
-                            time: row.Hora || '',
-                            reasonId: row.MotivoAusencia || null,
-                            reasonDesc: row.DescMotivoAusencia || '',
-                            direction: row.Entrada ? 'Entrada' : 'Salida'
-                        });
+                // LOGGING SYNTHETIC PUNCHES TO FIRESTORE (SIDECAR) - ONLY IF QUEUED
+                if (result.queuedCount > 0) {
+                    for (const row of strategyResult.rowsToInsert) {
+                        if (row.GeneradoPorApp && row.IDOperario) {
+                            await logSyntheticPunch({
+                                employeeId: row.IDOperario.toString(),
+                                date: row.Fecha || '',
+                                time: row.Hora || '',
+                                reasonId: row.MotivoAusencia || null,
+                                reasonDesc: row.DescMotivoAusencia || '',
+                                direction: row.Entrada ? 'Entrada' : 'Salida'
+                            });
+                        }
                     }
                 }
             }
@@ -578,19 +582,21 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                             }
 
                             // 5. Guardar todos los fichajes
-                            await addIncidents(allIncidents as RawDataRow[], `Incidencia Futura: ${reasonDesc}`);
+                            const result = await addIncidents(allIncidents as RawDataRow[], `Incidencia Futura: ${reasonDesc}`);
 
-                            // 6. Log en Firestore para auditoría
-                            for (const incident of allIncidents) {
-                                if (incident.IDOperario) {
-                                    await logSyntheticPunch({
-                                        employeeId: incident.IDOperario.toString(),
-                                        date: incident.Fecha || '',
-                                        time: incident.Hora || '',
-                                        reasonId: incident.MotivoAusencia || null,
-                                        reasonDesc: incident.DescMotivoAusencia || '',
-                                        direction: incident.Entrada ? 'Entrada' : 'Salida'
-                                    }).catch(err => console.error('⚠️ Error logging to Firestore:', err));
+                            // 6. Log en Firestore para auditoría - ONLY IF QUEUED
+                            if (result.queuedCount > 0) {
+                                for (const incident of allIncidents) {
+                                    if (incident.IDOperario) {
+                                        await logSyntheticPunch({
+                                            employeeId: incident.IDOperario.toString(),
+                                            date: incident.Fecha || '',
+                                            time: incident.Hora || '',
+                                            reasonId: incident.MotivoAusencia || null,
+                                            reasonDesc: incident.DescMotivoAusencia || '',
+                                            direction: incident.Entrada ? 'Entrada' : 'Salida'
+                                        }).catch(err => console.error('⚠️ Error logging to Firestore:', err));
+                                    }
                                 }
                             }
 

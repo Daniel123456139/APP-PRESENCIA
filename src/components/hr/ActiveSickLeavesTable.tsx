@@ -27,10 +27,12 @@ const ActiveSickLeavesTable: React.FC<ActiveSickLeavesTableProps> = ({ data, onE
 
     const activeLeaves = useMemo(() => {
         const allLeaves = groupRawDataToLeaves(data);
+        const todayStr = toISODateLocal(new Date());
         const filtered = allLeaves.filter(l => {
             if (!isSickLeave(l.motivoId)) return false;
             const meta = SickLeaveMetadataService.get(l.employeeId, l.startDate);
-            return !meta?.dischargeDate;
+            const dischargeDate = meta?.dischargeDate || null;
+            return !dischargeDate || dischargeDate > todayStr;
         });
 
         // DEDUPLICATION: One row per employee (the most recent one)

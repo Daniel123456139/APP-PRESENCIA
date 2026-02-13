@@ -29,6 +29,13 @@ const getShiftBounds = (shiftCode: string): { start: string; end: string } => {
     return { start: '07:00', end: '15:00' };
 };
 
+const addDaysToDate = (dateStr: string, days: number): string => {
+    const base = new Date(`${dateStr}T00:00:00`);
+    if (Number.isNaN(base.getTime())) return dateStr;
+    base.setDate(base.getDate() + days);
+    return base.toISOString().split('T')[0];
+};
+
 export interface IncidentStrategyResult {
     rowsToInsert: Partial<RawDataRow>[];
     rowsToUpdate: Partial<RawDataRow>[]; // Para Caso 3 (Modificación)
@@ -57,27 +64,14 @@ export const generateGapStrategy = (
     const originPunchId = (gap as any).originPunchId;
 
     // --- CASO 3: Salida Intermedia (Se va y vuelve) ---
-    // Si tenemos el ID del fichaje de salida original ("originPunchId"), es una modificación.
-    if (originPunchId) {
-        // En este caso, NO insertamos nuevos, sino que devolvemos una instrucción de UPDATE
-        // Pero necesitamos los datos originales... El caller deberá manejar el merge.
-        // Aquí simulamos cómo quedaría la fila si fuera una inserción nueva para validación,
-        // O devolvemos una estructura especial.
+    // El empleado ficha salida y luego vuelve a entrar.
+    // Ej: 08:00 (Salida) -> 11:00 (Entrada). Gap real: 08:00 -> 11:00.
+    // REGLA USUARIO: "lo que debe hacer es un minuto despues de la primera salida, meter un par de:
+    // entrada 'null' un minuto despues
+    // salida por el numero de la incidencia un minuto antes de la segunda entrada"
 
-        // Estrategia: Devolver un rowToUpdate parcial con la ID
-        return {
-            rowsToInsert: [],
-            rowsToUpdate: [{
-                IDControlPresencia: originPunchId,
-                MotivoAusencia: reason.id,
-                DescMotivoAusencia: reason.desc,
-                Computable: 'No',
-                Inicio: gapStart,
-                Fin: gapEnd
-            }],
-            description: `Justificación Salida Intermedia: Modificar salida existente (${gapStart})`
-        };
-    }
+    // IMPORTANTE: Ignoramos 'originPunchId' aquí porque el usuario EXPLICITAMENTE pidió
+    // insertar pares (Entry+1, Exit-1) y NO modificar el fichaje original.
 
     const commonProps = {
         IDOperario: employee.operario,
@@ -91,15 +85,14 @@ export const generateGapStrategy = (
 
     // --- CASO 2: Entrada Tardía ---
     // El empleado llegó tarde (ej. 11:35). El GAP es 07:00 -> 11:35.
-    // Acción: INSERTAR par sintético antes de la entrada real.
-    // Entrada: 07:00 (Sin motivo)
-    // Salida: 11:34 (Con motivo)
+    // REGLA USUARIO: "la hora de entrada se la pone a las 07:02, esto es incorrecto debe de ser a las 07:00"
     if (isStartGap) {
+        // La salida de la incidencia es 1 minuto antes de la llegada real
         const exitTime = addMinutes(gapEnd, -1);
 
         const entryRow = {
             ...commonProps,
-            Hora: shift.start,
+            Hora: shift.start, // FORZAR 07:00 o 15:00 exacto
             Entrada: 1,
             MotivoAusencia: null,
             DescMotivoAusencia: '',
@@ -114,24 +107,23 @@ export const generateGapStrategy = (
             MotivoAusencia: reason.id,
             DescMotivoAusencia: reason.desc,
             Computable: 'No',
-            Inicio: shift.start,
-            Fin: gapEnd, // Guardamos el fin real del gap para referencia visual
+            Inicio: shift.start, // Referencia visual
+            Fin: gapEnd,        // Referencia visual
             GeneradoPorApp: true
         };
 
         return {
             rowsToInsert: [entryRow, exitRow],
             rowsToUpdate: [],
-            description: `Entrada Tardía: Insertar 07:00 (Entrada) y ${exitTime} (Salida Justificada)`
+            description: `Entrada Tardía: Insertar ${shift.start} (Entrada) y ${exitTime} (Salida Justificada)`
         };
     }
 
     // --- CASO 1: Salida Anticipada ---
     // El empleado se fue antes (ej. 12:00). El GAP es 12:00 -> 15:00.
-    // Acción: INSERTAR par sintético después de la salida real.
-    // Entrada: 12:01 (Sin motivo)
-    // Salida: 15:00 (Con motivo)
+    // REGLA USUARIO: "la app graba la sigueinte entrada para la incidencia alas 12:02, en vez dea las 12:01"
     if (isEndGap) {
+        // Entrada de la incidencia: 1 minuto después de la salida real
         const entryTime = addMinutes(gapStart, 1);
 
         const entryRow = {
@@ -159,19 +151,14 @@ export const generateGapStrategy = (
         return {
             rowsToInsert: [entryRow, exitRow],
             rowsToUpdate: [],
-            description: `Salida Anticipada: Insertar ${entryTime} (Entrada) y 15:00 (Salida Justificada)`
+            description: `Salida Anticipada: Insertar ${entryTime} (Entrada) y ${shift.end} (Salida Justificada)`
         };
     }
 
-    // --- CASO 3: Salida Intermedia (Se va y vuelve) ---
-    // El empleado ficha salida y luego vuelve a entrar.
-    // Ej: 08:00 (Salida) -> 11:00 (Entrada). Gap real: 08:00 -> 11:00.
-    // REGLA: Insertar par sintético "dentro" del hueco para justificar.
-    // Entrada: 08:01 (Justo después de salir)
-    // Salida: 10:59 (Justo antes de volver)
-
-    // Fallback para cualquier otro caso que no sea startGap o endGap
+    // --- CASO 3 (Continuación): Salida Intermedia ---
+    // Entrada Incidencia: 1 minuto después de la salida real (gapStart)
     const entryTime = addMinutes(gapStart, 1);
+    // Salida Incidencia: 1 minuto antes de la entrada real (gapEnd)
     const exitTime = addMinutes(gapEnd, -1);
 
     const entryRow = {
@@ -213,6 +200,8 @@ export const generateFullDayStrategy = (
 ): IncidentStrategyResult => {
     const shiftCode = employee.turnoAsignado || 'M';
     const shift = getShiftBounds(shiftCode);
+    const isCrossMidnight = shift.end < shift.start;
+    const exitDate = isCrossMidnight ? addDaysToDate(date, 1) : date;
 
     const commonProps = {
         IDOperario: employee.operario,
@@ -236,6 +225,7 @@ export const generateFullDayStrategy = (
 
     const exitRow = {
         ...commonProps,
+        Fecha: exitDate,
         Hora: shift.end,
         Entrada: 0,
         MotivoAusencia: reason.id,

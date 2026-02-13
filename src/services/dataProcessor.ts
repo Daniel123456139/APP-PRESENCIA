@@ -563,26 +563,21 @@ export const generateProcessedData = (
                         }
                         else if (!isSyntheticAbsencePair && durationHours > 0) {
                             // FIX: Prevent Double Counting (Presence vs Justification Overlap)
-                            // If this presence slice overlaps with known justifications, subtract the overlap from Presence.
-                            // Justification takes precedence effectively in the sum (because we count it fully above).
-                            // But reality: Presence should probably be reality. However, for "Justification pairs" (synthetic),
-                            // they represent "Time I claim I was doing X". If I was working, I shouldn't claim.
-                            // In the specific bug case (Entry 11:56, Justified until 11:57), the user considers 8.02h wrong.
-                            // Subtracting overlap ensures 8.00h.
+                            // Restore subtraction logic to handle cases where real punches conflict with full-day incidents.
+                            // Rule: Justification takes precedence. If a justification exists, work hours are reduced.
+                            let totalOverlap = 0;
+                            const justifications = dailyJustifications.get(currentDateStr) || [];
+                            const sMin = effectiveStart.getHours() * 60 + effectiveStart.getMinutes();
+                            const eMin = effectiveEnd.getHours() * 60 + effectiveEnd.getMinutes();
 
+                            justifications.forEach(j => {
+                                const os = Math.max(sMin, j.start);
+                                const oe = Math.min(eMin, j.end);
+                                if (oe > os) totalOverlap += (oe - os) / 60;
+                            });
 
-
-                            // 🛑 CRITICAL FIX REVISION: REMOVE OVERLAP SUBTRACTION COMPLETELY
-                            // User Feedback: "Nunca debería haber solapamiento".
-                            // Analysis: The `dailyJustifications` map might contain broad ranges (e.g. 07-15) from metadata,
-                            // while the actual punches define narrow, non-overlapping intervals (e.g. 08-12 Justified, 14-15 Work).
-                            // Subtracting overlap (either from Work or Justification) penalizes the user for 'Ghost Ranges'.
-                            // DECISION: Work is Work (TimeSlices). Joined Justifications are Justifications. 
-                            // We trust the Loop's disjoint processing. Double counting is rare and less harmful than processing ghosts.
-
-
-                            // We do NOT subtract from durationHours anymore.
-                            // durationHours = Math.max(0, durationHours - totalOverlap); <-- REMOVED
+                            // Subtraction with floor at 0
+                            durationHours = Math.max(0, durationHours - totalOverlap);
 
                             const currentDayTotal = dailyHoursMap.get(currentDateStr) || 0;
                             dailyHoursMap.set(currentDateStr, currentDayTotal + durationHours);

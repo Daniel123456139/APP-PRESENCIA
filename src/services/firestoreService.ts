@@ -260,3 +260,38 @@ export async function fetchSyntheticPunches(
         return new Map(); // Retornar vacío en caso de error para no romper la app
     }
 }
+
+export async function deleteSyntheticPunch(id: string): Promise<void> {
+    try {
+        const db = getDb();
+        await deleteDoc(doc(db, 'APP_GENERATED_PUNCHES', id));
+        logger.info(`Fichaje sintético eliminado: ${id}`);
+    } catch (error) {
+        logger.error('❌ Error eliminando fichaje sintético:', error);
+    }
+}
+
+export async function deleteSyntheticPunchesInRange(employeeId: number, startDate: string, endDate: string): Promise<void> {
+    const db = getDb();
+    const q = query(
+        collection(db, 'APP_GENERATED_PUNCHES'),
+        where('employeeId', '==', employeeId.toString()),
+        where('date', '>=', startDate),
+        where('date', '<=', endDate)
+    );
+
+    const snapshot = await getDocs(q);
+    const batch: Promise<void>[] = [];
+    snapshot.forEach(doc => {
+        batch.push(deleteDoc(doc.ref));
+    });
+
+    try {
+        await Promise.all(batch);
+        if (batch.length > 0) logger.info(`Eliminados ${batch.length} fichajes sintéticos en rango ${startDate}-${endDate}`);
+    } catch (error) {
+        logger.error('❌ Error eliminando fichajes sintéticos en rango:', error);
+    }
+}
+
+

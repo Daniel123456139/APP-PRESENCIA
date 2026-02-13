@@ -9,6 +9,7 @@ import HrDataTableVirtual from '../HrDataTableVirtual';
 import HrDataTable from '../HrDataTable';
 import AusenciasTable from '../AusenciasTable';
 import VacationsTable from '../VacationsTable';
+import ActiveBajasTable from '../ActiveBajasTable';
 import ExportNominasModal from '../ExportNominasModal';
 
 const HrDashboardPage: React.FC = () => {
@@ -106,6 +107,10 @@ const HrDashboardPage: React.FC = () => {
         return d.getDay() === 6;
     }, [startDate, endDate, effectiveCalendarDays]);
 
+    const datasetBajas = useMemo(() => {
+        return datasetResumen.filter(row => row.hITAT > 0 || row.hITEC > 0);
+    }, [datasetResumen]);
+
     return (
         <div className="space-y-6">
             <div className="bg-gradient-to-br from-white via-slate-50 to-indigo-50 rounded-2xl border border-slate-200/70 p-6 shadow-sm">
@@ -199,6 +204,12 @@ const HrDashboardPage: React.FC = () => {
             {/* Only show secondary tables if NOT a Type 1 day (Saturday/Festive) when viewing a single day */}
             {(!isDayType1) && (
                 <>
+                    <ActiveBajasTable
+                        data={datasetBajas}
+                        startDate={startDate}
+                        endDate={endDate}
+                    />
+
                     <AusenciasTable
                         data={datasetAusencias}
                         onRegisterIncident={handleIncidentClick}

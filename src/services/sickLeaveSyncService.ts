@@ -106,8 +106,7 @@ class SickLeaveSyncServiceClass {
         // Calcular rango de fechas
         const dateRange = this.calculateDateRange(
             startDate,
-            metadata?.dischargeDate,
-            metadata?.nextRevisionDate
+            metadata?.dischargeDate
         );
 
         let fichajesCreated = 0;
@@ -127,13 +126,13 @@ class SickLeaveSyncServiceClass {
                     continue;
                 }
 
-                // Grabar entrada normal (código 01)
+                // Grabar entrada normal (sin motivo)
                 await this.insertFichajeWithRetry({
                     IDOperario: employeeId,
                     Fecha: date,
                     Hora: horario.Inicio,
                     Entrada: 1,
-                    MotivoAusencia: 1  // Entrada normal
+                    MotivoAusencia: null
                 });
 
                 // Grabar salida con código de baja (10/11)
@@ -169,19 +168,15 @@ class SickLeaveSyncServiceClass {
      */
     private calculateDateRange(
         startDate: string,
-        dischargeDate?: string,
-        nextRevisionDate?: string
+        dischargeDate?: string
     ): string[] {
         const today = toISODateLocal(new Date());
 
-        // Lógica de prioridad: dischargeDate > nextRevisionDate > HOY
+        // Solo generar hasta HOY. Si la fecha de alta ya pasó, cortar en esa fecha.
         let endDate = today;
 
-        if (dischargeDate) {
+        if (dischargeDate && dischargeDate <= today) {
             endDate = dischargeDate;
-        } else if (nextRevisionDate) {
-            // Solo usar fecha de revisión si es futura o hoy
-            endDate = nextRevisionDate >= today ? nextRevisionDate : today;
         }
 
         const dates: string[] = [];

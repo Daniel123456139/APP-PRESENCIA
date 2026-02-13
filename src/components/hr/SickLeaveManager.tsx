@@ -220,6 +220,26 @@ const SickLeaveManager: React.FC<SickLeaveManagerProps> = ({ activeSickLeaves, o
         // Run this check periodically or when data changes
     }, [activeSickLeaves, historicalBajas]); // Dependency on historicalBajas ensures we don't try before loading history
 
+    // NEW: Daily Auto-Sync of Sick Leave Punches
+    useEffect(() => {
+        const runAutoSync = async () => {
+            if (activeSickLeaves.length === 0) return;
+
+            const todayStr = toISODateLocal(new Date());
+            const lastSync = localStorage.getItem('sickLeaveAutoSyncDate');
+            if (lastSync === todayStr) return;
+
+            try {
+                await SickLeaveSyncService.syncAllActiveSickLeaves(activeSickLeaves);
+                localStorage.setItem('sickLeaveAutoSyncDate', todayStr);
+            } catch (err) {
+                console.error('Auto-sync bajas fallido:', err);
+            }
+        };
+
+        runAutoSync();
+    }, [activeSickLeaves]);
+
 
     const historicalBajasAsLeaves = useMemo(() => {
         if (historicalBajas.length === 0) return [] as (LeaveRange & { dischargeDate?: string })[];

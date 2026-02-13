@@ -283,7 +283,6 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                     <NavItem to="/portal/dashboard" label="Gestión de Fichajes" icon={<LayoutDashboard size={20} />} />
                     <NavItem to="/portal/jobs" label="Gestión de Trabajos" icon={<Briefcase size={20} />} />
                     <NavItem to="/portal/history" label="Historial Incidencias" icon={<History size={20} />} />
-                    <NavItem to="/portal/sickleaves" label="Gestión de Bajas" icon={<Stethoscope size={20} />} />
 
                     <NavItem to="/portal/vacations" label="Gestión de Vacaciones" icon={<Palmtree size={20} />} />
                     <NavItem to="/portal/calendar" label="Calendario" icon={<CalendarDays size={20} />} />
