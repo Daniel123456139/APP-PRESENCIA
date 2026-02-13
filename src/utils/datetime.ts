@@ -70,3 +70,49 @@ export const extractTimeHHMMSS = (value: string): string => {
     const ss = (match[3] || '00').padStart(2, '0');
     return `${hh}:${mm}:${ss}`;
 };
+
+/**
+ * Helper para parsear fechas del ERP (dd/MM/yyyy + HH:mm:ss)
+ */
+export const parseErpDateTime = (fechaStr: string | null, horaStr: string | null): Date => {
+    if (!fechaStr) return new Date(NaN);
+
+    try {
+        // Cleaning: Handle ISO strings in Date field (e.g., "2026-01-22T00:00:00")
+        const cleanFecha = fechaStr.includes('T') ? fechaStr.split('T')[0] : fechaStr;
+
+        let day, month, year;
+        if (cleanFecha.includes('/')) {
+            const parts = cleanFecha.split('/');
+            day = Number(parts[0]);
+            month = Number(parts[1]);
+            year = Number(parts[2]);
+        } else {
+            const parts = cleanFecha.split('-');
+            year = Number(parts[0]);
+            month = Number(parts[1]);
+            day = Number(parts[2]);
+        }
+
+        // Cleaning: Handle ISO strings in Time field (e.g., "1900-01-01T09:30:00")
+        let cleanHora = horaStr || '00:00:00';
+        if (cleanHora.includes('T')) {
+            cleanHora = cleanHora.split('T')[1];
+        }
+
+        const [hour, min, sec] = cleanHora.split(':').map(Number);
+        return new Date(year, month - 1, day, hour || 0, min || 0, sec || 0);
+    } catch {
+        return new Date(NaN);
+    }
+};
+
+/**
+ * Convierte diferencia de tiempo a horas decimales
+ */
+export const timeToDecimalHours = (start: Date, end: Date): number => {
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+    const diffMs = end.getTime() - start.getTime();
+    if (diffMs <= 0) return 0;
+    return diffMs / (1000 * 60 * 60);
+};

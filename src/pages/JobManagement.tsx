@@ -5,47 +5,20 @@ import { JobControlEntry, RawDataRow, ProcessedDataRow } from '../types';
 import { CalendarioDia } from '../services/erpApi';
 import { format, differenceInMinutes } from 'date-fns';
 import { useNotification } from '../components/shared/NotificationContext';
-import { ChevronDown, ChevronUp, RefreshCw, AlertTriangle, Smartphone, Layers, Search, PieChart, FileText, BarChart3, CheckCircle2, Clock, Target } from 'lucide-react';
-import { exportImproductiveRankingToPDF, exportWeeklyJobAuditToPDF, exportImproductiveByArticleToPDF } from '../services/jobAuditExportService';
+import { ChevronDown, ChevronUp, RefreshCw, AlertTriangle, Smartphone, Layers, Search, PieChart, FileText, CheckCircle2, Clock, Target } from 'lucide-react';
+import { exportWeeklyJobAuditToPDF } from '../services/jobAuditExportService';
 import { getImproductiveArticle } from '../data/improductiveArticles';
 import { ProductivityDashboard } from '../components/hr/ProductivityDashboard';
 import PriorityAnalysisModal from '../components/job/PriorityAnalysisModal';
 import { parseExcelFile } from '../services/excelPriorityService';
 import { analyzeEmployeeWorks, calculateGlobalStats } from '../services/priorityAnalysisService';
 import PriorityDashboard from './PriorityDashboard';
-import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS } from '../utils/datetime';
+import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS, parseErpDateTime } from '../utils/datetime';
 import { parseLocalDateTime } from '../utils/localDate';
+import { useImproductiveReport } from '../hooks/useImproductiveReport';
+import { generateImproductivosExcel } from '../services/excelGenerator';
 
-/**
- * Helper para parsear fechas del ERP (dd/MM/yyyy + HH:mm:ss)
- */
-const parseErpDateTime = (fechaStr: string | null, horaStr: string | null): Date => {
-    if (!fechaStr) return new Date(NaN);
 
-    try {
-        // Cleaning: Handle ISO strings in Date field (e.g., "2026-01-22T00:00:00")
-        const cleanFecha = fechaStr.includes('T') ? fechaStr.split('T')[0] : fechaStr;
-
-        let day, month, year;
-        if (cleanFecha.includes('/')) {
-            [day, month, year] = cleanFecha.split('/').map(Number);
-        } else {
-            [year, month, day] = cleanFecha.split('-').map(Number);
-        }
-
-        // Cleaning: Handle ISO strings in Time field (e.g., "1900-01-01T09:30:00")
-        let cleanHora = horaStr || '00:00:00';
-        if (cleanHora.includes('T')) {
-            cleanHora = cleanHora.split('T')[1];
-        }
-
-        const [hour, min, sec] = cleanHora.split(':').map(Number);
-        return new Date(year, month - 1, day, hour || 0, min || 0, sec || 0);
-    } catch (e) {
-        console.error("Error parsing ERP DateTime:", fechaStr, horaStr);
-        return new Date(NaN);
-    }
-};
 
 const normalizeDateStr = (raw?: string | null): string => normalizeDateKey(raw || '');
 
@@ -136,6 +109,9 @@ export const JobManagement: React.FC<JobManagementProps> = ({
     const [loadingJobs, setLoadingJobs] = useState(false);
     const [jobProgress, setJobProgress] = useState<{ processed: number; total: number } | null>(null);
     const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+    // New Hook for Excel Report
+    const { generateReportData, loading: loadingExcel, progress: excelProgress } = useImproductiveReport();
 
     // 2. Restore selectedDepartment on mount if exists in storage
     useEffect(() => {
@@ -605,85 +581,26 @@ export const JobManagement: React.FC<JobManagementProps> = ({
         }
     };
 
-    const handleExportImproductiveByArticle = async () => {
+
+    const handleExportImproductivosExcel = async () => {
         try {
-            showNotification('Generando informe de actividades...', 'info');
+            // 1. Fetch and processed data using the hook
+            // Updated to match new return type { data, allArticleIds }
+            const result = await generateReportData(startDate, endDate);
 
-            // Aggregate by Article
-            const articleMap = new Map<string, { name: string; hours: number; count: number }>();
-
-            filteredRows.forEach(row => {
-                row.jobs.forEach(job => {
-                    const article = getImproductiveArticle(job.IDArticulo);
-                    if (article) {
-                        const s = parseErpDateTime(job.FechaInicio, job.HoraInicio);
-                        const e = parseErpDateTime(job.FechaFin, job.HoraFin);
-                        if (!isNaN(s.getTime()) && !isNaN(e.getTime())) {
-                            const d = differenceInMinutes(e, s) / 60; // hours
-                            if (d > 0) {
-                                const key = job.IDArticulo;
-                                const current = articleMap.get(key) || { name: article.desc, hours: 0, count: 0 };
-                                current.hours += d;
-                                current.count += 1;
-                                articleMap.set(key, current);
-                            }
-                        }
-                    }
-                });
-            });
-
-            const totalImproductiveHours = Array.from(articleMap.values()).reduce((acc, v) => acc + v.hours, 0);
-
-            const articleRows = Array.from(articleMap.entries()).map(([id, data]) => ({
-                articleId: id,
-                articleName: data.name,
-                totalHours: data.hours,
-                percentOfTotalImproductive: totalImproductiveHours > 0 ? (data.hours / totalImproductiveHours) * 100 : 0,
-                occurrenceCount: data.count
-            })).sort((a, b) => b.totalHours - a.totalHours);
-
-            await exportImproductiveByArticleToPDF(articleRows, {
-                startDate,
-                endDate,
-                department: selectedDepartment
-            });
-
-            showNotification('✅ Informe de actividades exportado', 'success');
+            // 2. Generate Excel
+            if (result && result.data && result.data.length > 0) {
+                generateImproductivosExcel(result.data, result.allArticleIds, { start: startDate, end: endDate });
+                showNotification('✅ Excel de Improductivos generado correctamente', 'success');
+            } else {
+                showNotification('⚠️ No hay datos para generar el reporte', 'warning');
+            }
         } catch (error) {
-            console.error('Error exportando informe actividades:', error);
-            showNotification('❌ Error al generar el informe', 'error');
+            console.error('Error exporting Excel:', error);
+            // Error notification is already handled by the hook/service but duplication here is safe
         }
     };
 
-    const handleExportImproductiveRanking = async () => {
-        try {
-            showNotification('Generando ranking de improductivos...', 'info');
-
-            const rankingRows = [...filteredRows]
-                .map(row => ({
-                    operario: row.emp.id,
-                    nombre: row.emp.name,
-                    departamento: row.emp.department,
-                    improductiveHours: row.improductiveTimeProduced,
-                    totalPresence: row.totalPresence,
-                    improductivePercent: row.totalPresence > 0
-                        ? (row.improductiveTimeProduced / row.totalPresence) * 100
-                        : 0
-                }))
-                .sort((a, b) => b.improductiveHours - a.improductiveHours);
-
-            await exportImproductiveRankingToPDF(rankingRows, {
-                startDate,
-                endDate,
-                department: selectedDepartment
-            });
-
-            showNotification('✅ Ranking de improductivos exportado', 'success');
-        } catch (error) {
-            console.error('Error exportando ranking:', error);
-            showNotification('❌ Error al exportar el ranking de improductivos', 'error');
-        }
-    };
 
     const handleExecutePriorityAnalysis = async (
         analysisStartDate: string,
@@ -918,37 +835,37 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                             </div>
                         ) : null}
 
+                        {loadingExcel && excelProgress ? (
+                            <div className="min-w-[220px]">
+                                <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
+                                    <span>Generando Excel {excelProgress.current}/{excelProgress.total}</span>
+                                    <span>{Math.round((excelProgress.current / excelProgress.total) * 100)}%</span>
+                                </div>
+                                <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                                    <div
+                                        className="h-full bg-emerald-500 transition-all"
+                                        style={{ width: `${Math.round((excelProgress.current / excelProgress.total) * 100)}%` }}
+                                    />
+                                </div>
+                            </div>
+                        ) : null}
+
                         <div className="flex flex-wrap items-center gap-2 p-3 bg-slate-100/50 rounded-xl border border-slate-200/60 shadow-inner">
                             <div className="flex flex-col mr-2">
                                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter leading-none mb-1">Herramientas de</span>
                                 <span className="text-xs font-black text-indigo-600 uppercase tracking-wider leading-none">Exportación</span>
                             </div>
 
+
                             <button
-                                onClick={handleExportPDF}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
-                                title="Informe General de Presencia"
+                                onClick={handleExportImproductivosExcel}
+                                disabled={loadingExcel}
+                                className={`flex items-center gap-2 px-3 py-1.5 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5
+                                    ${loadingExcel ? 'bg-slate-400 cursor-wait' : 'bg-green-600 hover:bg-green-700'}`}
+                                title="Exportar Excel de Improductivos por Sección"
                             >
                                 <FileText className="w-3.5 h-3.5" />
-                                General
-                            </button>
-
-                            <button
-                                onClick={handleExportImproductiveRanking}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
-                                title="Ranking de Empleados Improductivos"
-                            >
-                                <BarChart3 className="w-3.5 h-3.5" />
-                                Ranking
-                            </button>
-
-                            <button
-                                onClick={handleExportImproductiveByArticle}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-all hover:-translate-y-0.5"
-                                title="Informe de Actividades Improductivas"
-                            >
-                                <Layers className="w-3.5 h-3.5" />
-                                Actividades
+                                {loadingExcel ? 'Generando...' : 'Excel Improductivos'}
                             </button>
 
                             <button
