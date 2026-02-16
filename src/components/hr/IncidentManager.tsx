@@ -1,17 +1,16 @@
 import React, { useState, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { RawDataRow, ProcessedDataRow, Role, IncidentLogEntry, UnjustifiedGap, WorkdayDeviation } from '../../types';
-import { useErpDataActions } from '../../store/erpDataStore';
+import { useFichajesMutations } from '../../hooks/useFichajes';
 import { useNotification } from '../shared/NotificationContext';
 import RecordIncidentModal from './RecordIncidentModal';
 import ManualIncidentModal, { ManualIncidentData } from './ManualIncidentModal';
-import ValidationErrorsModal from '../shared/ValidationErrorsModal';
 import MultipleAdjustmentModal from './MultipleAdjustmentModal';
 import LateArrivalsModal from './LateArrivalsModal';
 import FreeHoursFilterModal from './FreeHoursFilterModal';
 import FutureIncidentsModal from './FutureIncidentsModal';
 import { getMotivosAusencias, getCalendarioOperario } from '../../services/erpApi';
 import { fetchFichajes as getFichajes } from '../../services/apiService';
-import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
+import { validateNewIncidents } from '../../services/validationService';
 import { generateGapStrategy, generateFullDayStrategy, generateWorkdayStrategy } from '../../services/incidentStrategies';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
 import { logIncident as logFirestoreIncident, logSyntheticPunch } from '../../services/firestoreService';
@@ -54,7 +53,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
         endDate
     } = props;
     const { showNotification } = useNotification();
-    const { addIncidents, updateRows } = useErpDataActions();
+    const { addIncidents, updateRows } = useFichajesMutations();
 
     const logIncident = (employee: ProcessedDataRow, reasonId: number, reasonDesc: string, type: string, details: string) => {
         const newEntry: IncidentLogEntry = {
@@ -110,6 +109,21 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
     const [motivosAusencia, setMotivosAusencia] = useState<{ id: number; desc: string }[]>([]);
 
     const [justifiedIncidentKeys, setJustifiedIncidentKeys] = useState<Map<string, number>>(new Map());
+
+    const validateRowsBeforeSave = (rows: RawDataRow[]) => {
+        const issues = validateNewIncidents(erpData, rows);
+        const errors = issues.filter(i => i.type === 'error');
+
+        if (errors.length > 0) {
+            const msg = errors.map(e => e.message).join(' | ');
+            throw new Error(`Validación bloqueante: ${msg}`);
+        }
+
+        const warnings = issues.filter(i => i.type === 'warning');
+        if (warnings.length > 0) {
+            showNotification(`Avisos de validación: ${warnings.map(w => w.message).join(' | ')}`, 'warning');
+        }
+    };
 
     useImperativeHandle(ref, () => ({
         handleIncidentClick: (employee) => {
@@ -276,7 +290,12 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
             }
 
             // Save to Database/ERP
-            const result = await addIncidents([entryRow as RawDataRow, exitRow as RawDataRow], desc);
+            validateRowsBeforeSave([entryRow as RawDataRow, exitRow as RawDataRow]);
+
+            const result = await addIncidents({
+                newRows: [entryRow as RawDataRow, exitRow as RawDataRow],
+                userName: 'RRHH'
+            });
 
             // Logging Synthetic Punches to Firestore ONLY IF QUEUED
             if (result.queuedCount > 0) {
@@ -346,9 +365,16 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
 
             console.log(`📝 [JUSTIFY] Estrategia calculada: ${strategyResult.description}`);
 
+            if (strategyResult.rowsToInsert.length > 0) {
+                validateRowsBeforeSave(strategyResult.rowsToInsert as RawDataRow[]);
+            }
+
             // 2. Ejecutar Acciones (Inserts y Updates)
             if (strategyResult.rowsToInsert.length > 0) {
-                const result = await addIncidents(strategyResult.rowsToInsert as RawDataRow[], strategyResult.description);
+                const result = await addIncidents({
+                    newRows: strategyResult.rowsToInsert as RawDataRow[],
+                    userName: 'RRHH'
+                });
                 didSave = true;
 
                 // LOGGING SYNTHETIC PUNCHES TO FIRESTORE (SIDECAR) - ONLY IF QUEUED
@@ -384,7 +410,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                 }
 
                 if (oldRows.length > 0) {
-                    await updateRows(oldRows, newRows);
+                    await updateRows({ oldRows, newRows });
                     didSave = true;
                 }
             }
@@ -446,7 +472,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                         });
                         if (changed.length > 0) {
                             const old = adjustmentData.filter(a => changed.some(c => c.IDControlPresencia === a.IDControlPresencia));
-                            await updateRows(old, changed);
+                            await updateRows({ oldRows: old, newRows: changed });
                             showNotification(`${changed.length} fichajes actualizados`, 'success');
                             onRefreshNeeded();
                         }
@@ -582,7 +608,12 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                             }
 
                             // 5. Guardar todos los fichajes
-                            const result = await addIncidents(allIncidents as RawDataRow[], `Incidencia Futura: ${reasonDesc}`);
+                            validateRowsBeforeSave(allIncidents as RawDataRow[]);
+
+                            const result = await addIncidents({
+                                newRows: allIncidents as RawDataRow[],
+                                userName: 'RRHH'
+                            });
 
                             // 6. Log en Firestore para auditoría - ONLY IF QUEUED
                             if (result.queuedCount > 0) {

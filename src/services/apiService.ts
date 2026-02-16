@@ -69,6 +69,13 @@ const formatTimeForApi = (timeStr: string): string => {
     return cleanTime;
 };
 
+const sanitizeServerError = (value: string, maxLen = 140): string => {
+    if (!value) return 'Error ERP';
+    const clean = value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!clean) return 'Error ERP';
+    return clean.substring(0, maxLen);
+};
+
 // Helper con Timeout para evitar bloqueos
 const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 15000) => {
     const controller = new AbortController();
@@ -197,7 +204,7 @@ export const fetchFichajes = async (
                                 continue;
                             }
                             const errorText = await response.text();
-                            throw new Error(`Error del servidor (${response.status}): ${errorText.substring(0, 200)}`);
+                            throw new Error(`Error del servidor (${response.status}): ${sanitizeServerError(errorText, 200)}`);
                         }
                         throw new Error(`Error del servidor (${response.status})`);
                     }
@@ -438,7 +445,7 @@ export const insertFichaje = async (fichaje: Partial<RawDataRow>, userName: stri
         // Solo si no es un JSON claro de éxito, miramos el texto
         if (!isJson && suspiciousKeywords.some(kw => lowerText.includes(kw))) {
             console.error("❌ Respuesta sospechosa en texto plano detectada.");
-            throw new Error(`Error ERP (Texto sospechoso): ${responseText.substring(0, 100)}...`);
+            throw new Error(`Error ERP (Texto sospechoso): ${sanitizeServerError(responseText, 100)}...`);
         }
 
         return responseData || { status: 'ok' };
@@ -500,7 +507,7 @@ export const uploadFichaje = async (fichaje: Partial<RawDataRow>, userName: stri
         const responseText = await response.text();
 
         if (!response.ok) {
-            throw new Error(`Error ERP (${response.status}): ${responseText}`);
+            throw new Error(`Error ERP (${response.status}): ${sanitizeServerError(responseText, 180)}`);
         }
 
         let responseData: Record<string, unknown> = {};
@@ -594,7 +601,7 @@ export const updateFichaje = async (fichaje: Partial<RawDataRow>, userName: stri
         const lowerText = responseText.toLowerCase();
         const suspiciousKeywords = ["error", "exception", "failed", "fallo"];
         if (!isJson && suspiciousKeywords.some(kw => lowerText.includes(kw))) {
-            throw new Error(`Error ERP (Texto sospechoso): ${responseText.substring(0, 100)}...`);
+            throw new Error(`Error ERP (Texto sospechoso): ${sanitizeServerError(responseText, 100)}...`);
         }
 
         return responseData || { status: 'ok' };

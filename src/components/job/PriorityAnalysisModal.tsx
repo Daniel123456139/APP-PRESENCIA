@@ -11,6 +11,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Upload, Calendar, AlertCircle } from 'lucide-react';
 import { format, subDays } from 'date-fns';
 import { isValidExcelFile } from '../../services/excelPriorityService';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface PriorityAnalysisModalProps {
     isOpen: boolean;
@@ -136,10 +137,9 @@ const PriorityAnalysisModal: React.FC<PriorityAnalysisModalProps> = ({
                                 <Calendar className="w-4 h-4 text-violet-600" />
                                 DESDE
                             </label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
+                                onChange={setStartDate}
                                 disabled={isLoading}
                                 className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                             />
@@ -150,10 +150,9 @@ const PriorityAnalysisModal: React.FC<PriorityAnalysisModalProps> = ({
                                 <Calendar className="w-4 h-4 text-violet-600" />
                                 HASTA
                             </label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
+                                onChange={setEndDate}
                                 disabled={isLoading}
                                 className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                             />

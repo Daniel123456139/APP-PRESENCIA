@@ -231,6 +231,13 @@ export const generateProcessedData = (
             return normalizeTimeStrWithSeconds(a.Hora).localeCompare(normalizeTimeStrWithSeconds(b.Hora));
         });
 
+        const rowsByDate = new Map<string, RawDataRow[]>();
+        allRows.forEach(row => {
+            const dateKey = normalizeDateStr(row.Fecha);
+            if (!rowsByDate.has(dateKey)) rowsByDate.set(dateKey, []);
+            rowsByDate.get(dateKey)!.push(row);
+        });
+
         const isAbsenceExitRow = (row: RawDataRow): boolean => {
             const ma = getMotivoAusencia(row.MotivoAusencia);
             return isSalida(row.Entrada) &&
@@ -1136,7 +1143,7 @@ export const generateProcessedData = (
         // Si hay fichajes entre 00:00-06:00, pueden pertenecer al turno TN del día anterior
         // Esto evita marcar incorrectamente ese día como "ausencia completa"
         for (const dateStr of Array.from(datesWithActivity)) {
-            const dateRows = allRows.filter(r => normalizeDateStr(r.Fecha) === dateStr);
+            const dateRows = rowsByDate.get(dateStr) || [];
 
             // Verificar si hay fichajes nocturnos (00:00-06:00)
             const hasNightPunches = dateRows.some(r => {
@@ -1242,12 +1249,12 @@ export const generateProcessedData = (
                 const nextDayStr = toISODateLocal(nextDay);
 
                 // Obtener fichajes del día actual
-                let dayPunches = allRows.filter(r => normalizeDateStr(r.Fecha) === date);
+                let dayPunches = [...(rowsByDate.get(date) || [])];
 
                 // Si es turno TN, incluir también fichajes de madrugada del día siguiente (< 12:00)
                 if (effectiveShift === 'TN' || effectiveShift === 'T') {
-                    const nextDayEarlyPunches = allRows.filter(r => {
-                        if (normalizeDateStr(r.Fecha) !== nextDayStr) return false;
+                    const nextDayRows = rowsByDate.get(nextDayStr) || [];
+                    const nextDayEarlyPunches = nextDayRows.filter(r => {
                         const hour = parseInt(normalizeTimeStr(r.Hora).substring(0, 2), 10);
                         return hour < 12; // Madrugada (00:00 - 11:59)
                     });
@@ -1345,7 +1352,7 @@ export const generateProcessedData = (
 
                 if (isDayIncomplete && !hasJustification && !skipDeviationBecauseTaj) {
                     if (!employee.workdayDeviations.some(d => d.date === date)) {
-                        const dayPunches = allRows.filter(r => normalizeDateStr(r.Fecha) === date);
+                        const dayPunches = rowsByDate.get(date) || [];
                         const firstP = dayPunches.find(p => isEntrada(p.Entrada));
                         const lastP = [...dayPunches].reverse().find(p => isSalida(p.Entrada) || (!isEntrada(p.Entrada)));
 
@@ -1508,7 +1515,7 @@ export const generateProcessedData = (
                             if (employeeCalendars && employeeCalendars.has(employeeId)) {
                                 const empCal = employeeCalendars.get(employeeId)!;
                                 const tipoDia = empCal.get(dateStr);
-                                hasVacation = tipoDia === 2; // TipoDia=2 => Vacaciones
+                                hasVacation = String(tipoDia) === '2'; // TipoDia=2 => Vacaciones
                             }
 
                             // Fallback: verificar en los datos de fichajes

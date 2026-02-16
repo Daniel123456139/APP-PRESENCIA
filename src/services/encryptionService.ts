@@ -17,7 +17,13 @@ const SESSION_KEY = `key_${Date.now()}_${Math.random().toString(36).substring(7)
 
 // Clave persistente (Para LocalStorage que debe sobrevivir a recargas)
 // Se debe definir VITE_STORAGE_KEY en .env
-const PERSISTENT_KEY = import.meta.env.VITE_STORAGE_KEY || 'default_offline_storage_key_change_me';
+const deriveFallbackStorageKey = (): string => {
+    const origin = (typeof window !== 'undefined' && window.location?.origin) ? window.location.origin : 'unknown-origin';
+    const agent = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : 'unknown-agent';
+    return `fallback_${simpleHash(`${origin}|${agent}`)}`;
+};
+
+const PERSISTENT_KEY = String(import.meta.env.VITE_STORAGE_KEY || '').trim() || deriveFallbackStorageKey();
 
 // ═══════════════════════════════════════════════════════════════════
 // FUNCIONES PRINCIPALES

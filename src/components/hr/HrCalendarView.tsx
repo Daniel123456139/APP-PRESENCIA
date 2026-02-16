@@ -1,5 +1,4 @@
-
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { RawDataRow, Role, User, CompanyHoliday } from '../../types';
 import { CalendarioDia, getCalendarioEmpresa, getCalendarioOperario } from '../../services/erpApi';
 import { DEPARTMENTS } from '../../constants';
@@ -10,7 +9,8 @@ import ConfirmationModal from '../shared/ConfirmationModal';
 import ValidationErrorsModal from '../shared/ValidationErrorsModal';
 import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
 import { toISODateLocal } from '../../utils/localDate';
-import { useEffect } from 'react';
+import { useHrLayout } from './HrLayout';
+import { useFichajesMutations } from '../../hooks/useFichajes';
 
 const INCIDENT_COLORS: { [key: number]: string } = {
     2: 'bg-green-100 border-green-300 text-green-800',
@@ -22,25 +22,22 @@ const INCIDENT_COLORS: { [key: number]: string } = {
     102: 'bg-indigo-100 border-indigo-300 text-indigo-800', // Jornada Especial
 };
 
-interface HrCalendarViewProps {
-    erpData: RawDataRow[];
-    setErpData: React.Dispatch<React.SetStateAction<RawDataRow[]>>;
-    allEmployees: User[];
-    companyHolidays: CompanyHoliday[];
-    companyCalendarDays?: CalendarioDia[];
-    selectedEmployeeIds: string[];
-    setSelectedEmployeeIds: (ids: string[]) => void;
-    selectedDepartment: string;
-    setSelectedDepartment: (dept: string) => void;
-    departments: string[];
-}
+const HrCalendarView: React.FC = () => {
+    const {
+        erpData,
+        employeeOptions,
+        companyHolidays,
+        selectedEmployeeIds,
+        setSelectedEmployeeIds,
+        selectedDepartment,
+        setSelectedDepartment,
+        computedDepartments,
+        isLoading: isGlobalLoading,
+        effectiveCalendarDays
+    } = useHrLayout();
 
-const HrCalendarView: React.FC<HrCalendarViewProps> = ({
-    erpData, setErpData, allEmployees, companyHolidays, companyCalendarDays,
-    selectedEmployeeIds, setSelectedEmployeeIds,
-    selectedDepartment, setSelectedDepartment,
-    departments
-}) => {
+    const { addIncidents, isMutating } = useFichajesMutations();
+
     const [currentDate, setCurrentDate] = useState(new Date());
     const [viewMode, setViewMode] = useState<'employees' | 'company'>('company');
 
@@ -55,7 +52,8 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
     const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
     const [pendingRows, setPendingRows] = useState<RawDataRow[] | null>(null);
 
-    const [localCalendarDays, setLocalCalendarDays] = useState<CalendarioDia[]>(companyCalendarDays || []);
+    const [localCalendarDays, setLocalCalendarDays] = useState<CalendarioDia[]>(effectiveCalendarDays || []);
+
 
     useEffect(() => {
         const fetchMonthCalendar = async () => {
@@ -66,7 +64,7 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
                 let data: CalendarioDia[] = [];
                 // If exactly one employee is selected, fetch their specific calendar
                 if (selectedEmployeeIds.length === 1) {
-                    data = await getCalendarioOperario(selectedEmployeeIds[0], toISODateLocal(firstDay), toISODateLocal(lastDay));
+                    data = await getCalendarioOperario(String(selectedEmployeeIds[0]), toISODateLocal(firstDay), toISODateLocal(lastDay));
                 } else {
                     // Otherwise fetch general company calendar
                     data = await getCalendarioEmpresa(toISODateLocal(firstDay), toISODateLocal(lastDay));
@@ -80,25 +78,24 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
         fetchMonthCalendar();
     }, [currentDate, selectedEmployeeIds]);
 
-    const employeeOptions = useMemo(() => allEmployees.filter(u => u.role !== Role.HR), [allEmployees]);
-
     const departmentFilteredEmployees = useMemo(() => {
-        if (selectedDepartment === 'all') {
+        if (selectedDepartment === 'all' || selectedDepartment === 'TODOS') {
             return employeeOptions;
         }
         return employeeOptions.filter(emp => emp.department === selectedDepartment);
     }, [selectedDepartment, employeeOptions]);
 
-    const visibleEmployees: User[] = useMemo(() => {
+    const visibleEmployees = useMemo(() => {
         if (selectedEmployeeIds.length > 0) {
-            const numericIds = new Set(selectedEmployeeIds.map(id => parseInt(id, 10)));
-            return employeeOptions.filter(emp => numericIds.has(emp.id));
+            const idSet = new Set(selectedEmployeeIds.map(id => Number(id)));
+            return employeeOptions.filter(emp => idSet.has(emp.id));
         }
-        if (selectedDepartment !== 'all') {
+        if (selectedDepartment !== 'all' && selectedDepartment !== 'TODOS') {
             return departmentFilteredEmployees;
         }
         return employeeOptions;
     }, [selectedEmployeeIds, selectedDepartment, departmentFilteredEmployees, employeeOptions]);
+
 
     const allIncidents = useMemo(() => {
         if (viewMode === 'company') {
@@ -141,15 +138,16 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
             }));
         }
         return erpData.filter(row => row.MotivoAusencia !== 1 && row.MotivoAusencia !== 14 && row.Entrada !== 1);
-    }, [erpData, viewMode, companyHolidays, companyCalendarDays]);
+    }, [erpData, viewMode, companyHolidays, localCalendarDays]);
 
     const filteredIncidents = useMemo(() => {
         if (viewMode === 'company' || selectedEmployeeIds.length === 0) {
             return allIncidents;
         }
-        const numericIds = new Set(selectedEmployeeIds.map(id => parseInt(id, 10)));
-        return allIncidents.filter(inc => numericIds.has(inc.IDOperario));
+        const idSet = new Set(selectedEmployeeIds.map(id => Number(id)));
+        return allIncidents.filter(inc => idSet.has(inc.IDOperario));
     }, [allIncidents, selectedEmployeeIds, viewMode]);
+
 
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
     const startDay = (firstDayOfMonth.getDay() + 6) % 7; // Monday = 0, Sunday = 6
@@ -164,6 +162,7 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
         setSelectedEmployeeIds(allIds);
     };
 
+
     const handleDayClick = (day: number) => {
         if (viewMode === 'employees' && visibleEmployees.length === 0) {
             alert("Por favor, selecciona al menos un empleado en los filtros para añadir una ausencia.");
@@ -173,12 +172,17 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
         setIsEventModalOpen(true);
     };
 
-    const executeSave = (newRows: RawDataRow[]) => {
-        setErpData(prev => [...prev, ...newRows]);
-        setIsConfirmModalOpen(false);
-        setPendingRows(null);
-        setIsValidationModalOpen(false);
+    const executeSave = async (newRows: RawDataRow[]) => {
+        try {
+            await addIncidents({ newRows, userName: 'RRHH' });
+            setIsConfirmModalOpen(false);
+            setPendingRows(null);
+            setIsValidationModalOpen(false);
+        } catch (error: any) {
+            alert(`Error al guardar: ${error.message}`);
+        }
     };
+
 
     const handleSaveEvent = useCallback((reason: { id: number; desc: string }) => {
         if (!modalDate) return;
@@ -279,7 +283,8 @@ const HrCalendarView: React.FC<HrCalendarViewProps> = ({
                                 className="w-full sm:w-auto block pl-3 pr-10 py-2.5 text-sm border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 rounded-lg shadow-sm"
                             >
                                 <option value="all">Todas las secciones</option>
-                                {departments.map(dep => <option key={dep} value={dep}>{dep}</option>)}
+                                {computedDepartments.map(dep => <option key={dep} value={dep}>{dep}</option>)}
+
                             </select>
                         </div>
                         <div className="w-full sm:w-64">

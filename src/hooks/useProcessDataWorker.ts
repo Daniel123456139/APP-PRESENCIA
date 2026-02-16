@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { RawDataRow, ProcessedDataRow, Shift, User } from '../types';
 import { processData } from '../services/dataProcessor';
+import { trackPerfMetric } from '../services/performanceMonitoringService';
 
 interface WorkerResponse {
     success: boolean;
@@ -62,6 +63,7 @@ export function useProcessDataWorker(
         // Increment token for this run
         processingTokenRef.current += 1;
         const CurrentToken = processingTokenRef.current;
+        const processingStartTs = performance.now();
 
         setStatus('processing');
         setError(null);
@@ -100,6 +102,10 @@ export function useProcessDataWorker(
 
                 // Process
                 const syncRes = processData(rawData, allUsers, undefined, analysisRange, holidays, calendarMap);
+                trackPerfMetric('process_data_sync_fallback', performance.now() - processingStartTs, {
+                    rows: rawData.length,
+                    users: allUsers.length
+                });
 
                 // Only set if still relevant
                 if (CurrentToken === processingTokenRef.current) {
@@ -149,6 +155,10 @@ export function useProcessDataWorker(
                         setResult(e.data.data || []);
                         setStatus('success');
                         setError(null);
+                        trackPerfMetric('process_data_worker', performance.now() - processingStartTs, {
+                            rows: rawData.length,
+                            users: allUsers.length
+                        });
                     } else {
                         cleanupWorker(true);
                         console.error("Worker Error:", e.data?.error);

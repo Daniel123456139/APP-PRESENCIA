@@ -12,26 +12,7 @@ import Settings from '../Settings';
 import { JobManagement } from '../../../pages/JobManagement';
 
 export const HrCalendarPage: React.FC = () => {
-    const {
-        erpData, employeeOptions, companyHolidays, effectiveCalendarDays,
-        selectedEmployeeIds, setSelectedEmployeeIds,
-        selectedDepartment, setSelectedDepartment, computedDepartments
-    } = useHrLayout();
-
-    return (
-        <HrCalendarView
-            erpData={erpData}
-            setErpData={() => { }}
-            allEmployees={employeeOptions as any}
-            companyHolidays={companyHolidays}
-            companyCalendarDays={effectiveCalendarDays}
-            selectedEmployeeIds={selectedEmployeeIds}
-            setSelectedEmployeeIds={setSelectedEmployeeIds}
-            selectedDepartment={selectedDepartment}
-            setSelectedDepartment={setSelectedDepartment}
-            departments={computedDepartments}
-        />
-    );
+    return <HrCalendarView />;
 };
 
 export const HrSickLeavesPage: React.FC = () => {
@@ -53,8 +34,6 @@ export const HrHistoryPage: React.FC = () => {
         />
     );
 };
-
-
 
 export const HrProfilesPage: React.FC = () => {
     return <EmployeeProfilePanel />;

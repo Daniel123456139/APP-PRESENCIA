@@ -6,23 +6,14 @@ import { processData } from '../../services/dataProcessor';
 import { ProcessedDataRow } from '../../types';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { getGeminiClientApiKey, getGeminiDisabledMessage } from '../../config/aiConfig';
 
 interface Message {
     text: string;
     sender: 'user' | 'bot';
 }
 
-// Safe API Key retrieval to prevent crash in environments where process is undefined
-const getApiKey = () => {
-    try {
-        if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-            return process.env.API_KEY;
-        }
-    } catch (e) { }
-    return '';
-};
-
-const apiKey = getApiKey();
+const apiKey = getGeminiClientApiKey();
 const ai = apiKey ? new GoogleGenAI({ apiKey: apiKey }) : null;
 
 const Chatbot: React.FC = () => {
@@ -58,7 +49,7 @@ const Chatbot: React.FC = () => {
         if (text === '' || isLoading) return;
 
         if (!ai) {
-            setMessages(prev => [...prev, { text: text, sender: 'user' }, { text: "⚠️ Error: API Key no configurada. No puedo responder.", sender: 'bot' }]);
+            setMessages(prev => [...prev, { text: text, sender: 'user' }, { text: `⚠️ ${getGeminiDisabledMessage()}`, sender: 'bot' }]);
             return;
         }
 

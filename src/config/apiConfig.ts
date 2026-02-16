@@ -1,26 +1,41 @@
 
 export const getApiBaseUrl = (): string => {
+    const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+    const enforceProtocol = (url: string): string => {
+        if (!url) return url;
+        let clean = url.trim();
+        if (clean.endsWith('/')) clean = clean.slice(0, -1);
+        if (isProd && clean.startsWith('http://')) {
+            clean = `https://${clean.slice('http://'.length)}`;
+        }
+        return clean;
+    };
+
     // 1. Local Storage (Configuración manual tiene prioridad alta)
     try {
         const stored = localStorage.getItem('apiBaseUrl');
-        if (stored) return stored;
+        if (stored) return enforceProtocol(stored);
     } catch (e) {
         // Ignorar errores de acceso a localStorage
     }
 
     // 2. Variable de entorno (Vite)
     // @ts-ignore
-    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) {
+    if (typeof import.meta !== 'undefined' && import.meta.env) {
         // @ts-ignore
-        return import.meta.env.VITE_API_URL;
+        const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+        if (envUrl) {
+            return enforceProtocol(envUrl);
+        }
     }
 
     // 3. Fallback por defecto
-    return 'http://10.0.0.19:8000';
+    return isProd ? 'https://10.0.0.19:8000' : 'http://10.0.0.19:8000';
 };
 
 export const setApiBaseUrl = (url: string) => {
     try {
+        const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
         let cleanUrl = url.trim();
         // Quitar barra final si existe
         if (cleanUrl.endsWith('/')) {
@@ -28,7 +43,11 @@ export const setApiBaseUrl = (url: string) => {
         }
         // Validar protocolo
         if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
-            cleanUrl = 'http://' + cleanUrl;
+            cleanUrl = (isProd ? 'https://' : 'http://') + cleanUrl;
+        }
+
+        if (isProd && cleanUrl.startsWith('http://')) {
+            cleanUrl = 'https://' + cleanUrl.slice('http://'.length);
         }
 
         localStorage.setItem('apiBaseUrl', cleanUrl);
@@ -70,7 +89,6 @@ export const setErpUsername = (username: string) => {
         // Normalizar: convertir doble barra a simple antes de guardar
         const normalized = username.trim().replace(/\\\\/g, '\\');
         localStorage.setItem('erpUsername', normalized);
-        console.log('ERP Username guardado:', normalized);
     } catch (e) {
         console.error("Error guardando ERP Username", e);
     }

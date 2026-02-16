@@ -6,6 +6,7 @@ import ValidationErrorsModal from '../shared/ValidationErrorsModal';
 import { validateNewIncidents, ValidationIssue } from '../../services/validationService';
 import { generateGapStrategy, generateFullDayStrategy, generateWorkdayStrategy } from '../../services/incidentStrategies';
 import { useMotivos } from '../../hooks/useErp';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface RecordIncidentModalProps {
     // ... same props ...
@@ -401,10 +402,9 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                                 </h3>
                                 <div>
                                     <label className="block text-sm font-medium text-orange-800 mb-1">Fecha de la Ausencia</label>
-                                    <input
-                                        type="date"
+                                    <SmartDateInput
                                         value={manualDate}
-                                        onChange={(e) => setManualDate(e.target.value)}
+                                        onChange={setManualDate}
                                         className="block w-full border-orange-300 rounded-md focus:ring-orange-500 focus:border-orange-500"
                                     />
                                     <p className="text-xs text-orange-600 mt-1">

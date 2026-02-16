@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Outlet, NavLink, useLocation, useNavigate, useOutletContext } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Outlet, NavLink, useLocation, useOutletContext } from 'react-router-dom';
 import { BlogPost, Shift, SickLeave, IncidentLogEntry, CompanyHoliday, ProcessedDataRow, RawDataRow, FutureAbsence, Role } from '../../types';
 import { CalendarioDia } from '../../services/erpApi';
 import { useHrPortalData } from '../../hooks/useHrPortalData';
-import { toISODateLocal, getSmartDefaultDateRange } from '../../utils/localDate';
-import SyncStatusIndicator from '../shared/SyncStatusIndicator';
+import { getSmartDefaultDateRange } from '../../utils/localDate';
 import { IncidentManagerHandle } from './IncidentManager';
 import IncidentManager from './IncidentManager';
 import { exportUnproductivityToXlsx } from '../../services/exports/unproductivityExportService';
@@ -50,51 +49,56 @@ export interface HrLayoutContextType {
     // State from HrPortal/Layout
     startDate: string; setStartDate: React.Dispatch<React.SetStateAction<string>>;
     endDate: string; setEndDate: React.Dispatch<React.SetStateAction<string>>;
-    startTime: string; setStartTime: React.Dispatch<React.SetStateAction<string>>;
-    endTime: string; setEndTime: React.Dispatch<React.SetStateAction<string>>;
 
     // Data from useHrPortalData
     erpData: RawDataRow[];
+    processedData: ProcessedDataRow[];
     datasetResumen: ProcessedDataRow[];
-    datasetAusencias: any[];
-    employeeOptions: { id: number; name: string; role: Role; department: string; productivo: boolean }[];
+    datasetAusencias: ProcessedDataRow[];
+    employeeOptions: { id: number; name: string; role: Role; department: string; flexible: boolean }[];
     activeSickLeavesRaw: RawDataRow[];
-    effectiveCalendarDays: CalendarioDia[];
+    companyHolidays: CompanyHoliday[];
+    companyHolidaySet: Set<string>;
 
-    selectedEmployeeData: any;
+    selectedEmployeeData: ProcessedDataRow | undefined;
     employeeCalendarsByDate: Map<number, Map<string, CalendarioDia>>;
+    setEmployeeCalendarsByDate: React.Dispatch<React.SetStateAction<Map<number, Map<string, CalendarioDia>>>>;
 
     // UI/Filter State
     selectedDepartment: string; setSelectedDepartment: (val: string) => void;
     selectedEmployeeIds: string[]; setSelectedEmployeeIds: (ids: string[]) => void;
+    startTime: string; setStartTime: (val: string) => void;
+    endTime: string; setEndTime: (val: string) => void;
     turno: string; setTurno: (val: string) => void;
+    departmentFilteredEmployees: any[];
 
     // Computed
     isLongRange: boolean;
-    companyHolidaySet: Set<string>;
     computedDepartments: string[];
-    departmentFilteredEmployees: { id: number; name: string; role: Role; department: string; productivo: boolean }[];
+    isFetchingCalendars: boolean;
+    effectiveCalendarDays: CalendarioDia[];
     shouldUseVirtualization: boolean;
 
     // Actions
-    reloadFromServer: () => Promise<void>;
     handleExport: (range?: { startDate: string; endDate: string }) => void;
-    fetchActiveSickLeaves: () => Promise<void>;
+    handleFreeHoursExport: (section: string, filterEmployeeIds: string[]) => void;
+    handleExportResumen: () => void;
+    handleUnproductivityExport: () => void;
 
     // Status
+    isLoading: boolean;
     isReloading: boolean;
     isRefetching: boolean;
-    lastUpdated: number;
-    refreshError: string | null;
-    manualRefresh: () => void;
+    fichajesError: any;
+    refreshErpData: () => void;
+    reloadFromServer: () => void;
+    lastUpdated: number | null;
 
     // Handlers passed down
     handleIncidentClick: (employee: ProcessedDataRow) => void;
     handleOpenManualIncident: (employee: ProcessedDataRow) => void;
     handleOpenLateArrivals: () => void;
     handleOpenAdjustmentModal: () => void;
-    handleExportResumen: () => void;
-    handleUnproductivityExport: () => void;
 
     // Refs
     incidentManagerRef: React.RefObject<IncidentManagerHandle>;
@@ -102,9 +106,10 @@ export interface HrLayoutContextType {
     // Props passed through
     shifts: Shift[]; setShifts: React.Dispatch<React.SetStateAction<Shift[]>>;
     sickLeaves: SickLeave[]; setSickLeaves: React.Dispatch<React.SetStateAction<SickLeave[]>>;
-    companyHolidays: CompanyHoliday[]; setCompanyHolidays: React.Dispatch<React.SetStateAction<CompanyHoliday[]>>;
+    setCompanyHolidays: React.Dispatch<React.SetStateAction<CompanyHoliday[]>>;
     incidentLog: IncidentLogEntry[]; setIncidentLog: React.Dispatch<React.SetStateAction<IncidentLogEntry[]>>;
     blogPosts: BlogPost[]; setBlogPosts: React.Dispatch<React.SetStateAction<BlogPost[]>>;
+    fetchActiveSickLeaves: () => void;
 }
 
 export const useHrLayout = () => useOutletContext<HrLayoutContextType>();
@@ -152,30 +157,34 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
 
     // Business Logic Hook
     const {
-        erpData, datasetResumen, datasetAusencias, employeeOptions,
-        activeSickLeavesRaw, effectiveCalendarDays, selectedEmployeeData,
-        isReloading, isRefetching, lastUpdated, refreshError, manualRefresh,
-        selectedDepartment, setSelectedDepartment,
-        selectedEmployeeIds, setSelectedEmployeeIds,
-        turno, setTurno,
-        reloadFromServer, handleExport, handleFreeHoursExport, fetchActiveSickLeaves,
-        isLongRange, performanceMode, companyHolidaySet, computedDepartments,
-
-        departmentFilteredEmployees, shouldUseVirtualization, employeeCalendarsByDate
-    } = useHrPortalData({
-        startDate, endDate, startTime, endTime,
-        shifts: props.shifts,
-        companyHolidays: props.companyHolidays,
-        incidentLog: props.incidentLog,
-        setIncidentLog: props.setIncidentLog
-    });
+        erpData,
+        processedData,
+        datasetResumen,
+        datasetAusencias,
+        employeeOptions,
+        activeSickLeavesRaw,
+        companyCalendarDays,
+        selectedEmployeeData,
+        isLoading,
+        isRefetching,
+        fichajesError,
+        refreshErpData,
+        selectedDepartment,
+        setSelectedDepartment,
+        selectedEmployeeIds,
+        setSelectedEmployeeIds,
+        handleExport,
+        handleFreeHoursExport,
+        isLongRange,
+        computedDepartments,
+        employeeCalendarsByDate,
+        setEmployeeCalendarsByDate,
+        isFetchingCalendars,
+        lastUpdated,
+        refetchActiveSickLeaves
+    } = useHrPortalData({ startDate, endDate });
 
     const incidentManagerRef = useRef<IncidentManagerHandle>(null);
-
-    // Initial load effects
-    useEffect(() => {
-        fetchActiveSickLeaves();
-    }, [fetchActiveSickLeaves]);
 
     useEffect(() => {
         const saved = localStorage.getItem('incidentHistory');
@@ -233,41 +242,82 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         exportUnproductivityToXlsx(datasetResumen, filename, periodStr);
     };
 
+    const [turno, setTurno] = useState('all');
+
+    const departmentFilteredEmployees = useMemo(() => {
+        if (selectedDepartment === 'all' || selectedDepartment === 'TODOS') return employeeOptions;
+        return employeeOptions.filter(emp => emp.department === selectedDepartment);
+    }, [selectedDepartment, employeeOptions]);
+
+    const companyHolidaySet = useMemo(() => {
+        return new Set(props.companyHolidays.map(h => h.date));
+    }, [props.companyHolidays]);
+
+    const [shouldUseVirtualization, setShouldUseVirtualization] = useState(false);
+
+    useEffect(() => {
+        const readSettings = () => {
+            try {
+                const saved = localStorage.getItem('appSettings');
+                if (!saved) {
+                    setShouldUseVirtualization(false);
+                    return;
+                }
+                const parsed = JSON.parse(saved);
+                setShouldUseVirtualization(Boolean(parsed?.sistema?.modoRendimiento));
+            } catch {
+                setShouldUseVirtualization(false);
+            }
+        };
+
+        readSettings();
+        window.addEventListener('settingsChanged', readSettings);
+        return () => window.removeEventListener('settingsChanged', readSettings);
+    }, []);
+
     const contextValue: HrLayoutContextType = {
         startDate, setStartDate,
         endDate, setEndDate,
         startTime, setStartTime,
         endTime, setEndTime,
+        turno, setTurno,
+        departmentFilteredEmployees,
 
-        erpData, datasetResumen, datasetAusencias, employeeOptions,
-        activeSickLeavesRaw, effectiveCalendarDays, selectedEmployeeData,
-        employeeCalendarsByDate,
+        erpData, processedData, datasetResumen, datasetAusencias, employeeOptions,
+        activeSickLeavesRaw, companyHolidays: props.companyHolidays, companyHolidaySet, selectedEmployeeData,
+        employeeCalendarsByDate, setEmployeeCalendarsByDate,
 
         selectedDepartment, setSelectedDepartment,
         selectedEmployeeIds, setSelectedEmployeeIds,
-        turno, setTurno,
 
-        isLongRange, companyHolidaySet, computedDepartments,
-        departmentFilteredEmployees, shouldUseVirtualization,
+        isLongRange, computedDepartments, isFetchingCalendars,
+        effectiveCalendarDays: companyCalendarDays || [],
+        shouldUseVirtualization,
 
-        reloadFromServer, handleExport, fetchActiveSickLeaves,
+        handleExport, handleFreeHoursExport,
+        handleExportResumen, handleUnproductivityExport,
 
-        isReloading, isRefetching, lastUpdated, refreshError, manualRefresh,
+        isLoading,
+        isReloading: isLoading || isRefetching,
+        isRefetching,
+        fichajesError,
+        refreshErpData,
+        reloadFromServer: refreshErpData,
+        lastUpdated,
 
         handleIncidentClick,
         handleOpenManualIncident,
         handleOpenLateArrivals,
         handleOpenAdjustmentModal,
-        handleExportResumen,
-        handleUnproductivityExport,
 
         incidentManagerRef,
 
         shifts: props.shifts, setShifts: props.setShifts,
         sickLeaves: props.sickLeaves, setSickLeaves: props.setSickLeaves,
-        companyHolidays: props.companyHolidays, setCompanyHolidays: props.setCompanyHolidays,
+        setCompanyHolidays: props.setCompanyHolidays,
         incidentLog: props.incidentLog, setIncidentLog: props.setIncidentLog,
         blogPosts: props.blogPosts, setBlogPosts: props.setBlogPosts,
+        fetchActiveSickLeaves: () => { refetchActiveSickLeaves(); }
     };
 
     return (
@@ -290,12 +340,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                     <NavItem to="/portal/settings" label="Configuración" icon={<SettingsIcon size={20} />} />
 
                     <div className="mt-8 px-4">
-                        <SyncStatusIndicator
-                            lastUpdated={lastUpdated}
-                            isRefetching={isRefetching}
-                            error={refreshError}
-                            onManualRefresh={manualRefresh}
-                        />
+                        {/* Status indicators should be moved to components if needed, or keeping it empty for now if no easy sync status available yet */}
                     </div>
                 </nav>
             </aside>
@@ -316,7 +361,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                 ref={incidentManagerRef}
                 erpData={erpData}
                 employeeOptions={employeeOptions as any}
-                onRefreshNeeded={reloadFromServer}
+                onRefreshNeeded={refreshErpData}
                 setIncidentLog={props.setIncidentLog}
                 startDate={startDate}
                 endDate={endDate}

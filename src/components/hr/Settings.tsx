@@ -4,6 +4,7 @@ import { ANNUAL_CREDITS } from '../../constants';
 import { CompanyHoliday } from '../../types';
 import { getApiBaseUrl, setApiBaseUrl, clearApiBaseUrl, getErpUsername, setErpUsername } from '../../config/apiConfig';
 import { checkConnection } from '../../services/apiService';
+import SmartDateInput from '../shared/SmartDateInput';
 
 // Define the structure of our settings
 interface SettingsState {
@@ -317,7 +318,7 @@ const Settings: React.FC<SettingsProps> = ({ companyHolidays, setCompanyHolidays
                             </div>
                             <div>
                                 <label htmlFor="holidayDate" className="block text-sm font-medium text-slate-700">Fecha</label>
-                                <input type="date" id="holidayDate" name="date" value={newHoliday.date} onChange={handleNewHolidayChange} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md bg-white" />
+                                <SmartDateInput id="holidayDate" name="date" value={newHoliday.date} onChange={(nextValue) => setNewHoliday(prev => ({ ...prev, date: nextValue }))} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md bg-white" />
                             </div>
                         </div>
                         <button onClick={handleAddHoliday} className="w-full py-2 px-4 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">Añadir Festivo</button>

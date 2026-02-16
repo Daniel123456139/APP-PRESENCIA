@@ -1,5 +1,6 @@
 import React from 'react';
 import AdvancedEmployeeFilter from '../shared/AdvancedEmployeeFilter';
+import SmartDateInput from '../shared/SmartDateInput';
 import { Role } from '../../types';
 
 export interface EmployeeOption {
@@ -42,7 +43,6 @@ const HrFilters: React.FC<HrFiltersProps> = ({
     computedDepartments,
     departmentFilteredEmployees
 }) => {
-
     // --- Shortcuts Helpers ---
     const handleMonthShortcut = (type: 'current' | 'last' | 'year') => {
         const now = new Date();
@@ -107,13 +107,10 @@ const HrFilters: React.FC<HrFiltersProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div className="flex gap-2">
                     <div className="flex-1">
-                        <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Desde</label>
-                        <input
-                            type="date"
-                            value={startDate}
-                            onChange={e => setStartDate(e.target.value)}
-                            className="mt-1 block w-full rounded-lg border-slate-200 bg-slate-50 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 sm:text-sm"
-                        />
+                        <label htmlFor="startDateInput" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Desde</label>
+                        <div className="mt-1">
+                            <SmartDateInput id="startDateInput" value={startDate} onChange={setStartDate} showHint />
+                        </div>
                     </div>
                     <div className="w-24">
                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">&nbsp;</label>
@@ -128,14 +125,10 @@ const HrFilters: React.FC<HrFiltersProps> = ({
 
                 <div className="flex gap-2">
                     <div className="flex-1">
-                        <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Hasta</label>
-                        <input
-                            id="endDateInput"
-                            type="date"
-                            value={endDate}
-                            onChange={e => setEndDate(e.target.value)}
-                            className="mt-1 block w-full rounded-lg border-slate-200 bg-slate-50 shadow-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 sm:text-sm"
-                        />
+                        <label htmlFor="endDateInput" className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">Hasta</label>
+                        <div className="mt-1">
+                            <SmartDateInput id="endDateInput" value={endDate} onChange={setEndDate} />
+                        </div>
                     </div>
                     <div className="w-24">
                         <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider">&nbsp;</label>

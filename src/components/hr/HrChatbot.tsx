@@ -4,8 +4,9 @@ import { GoogleGenAI, Chat, FunctionDeclaration, Type, Tool } from "@google/gena
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ProcessedDataRow, RawDataRow, User } from '../../types';
-import { useErpDataActions } from '../../store/erpDataStore';
+import { useFichajesMutations } from '../../hooks/useFichajes';
 import { useMotivos } from '../../hooks/useErp';
+import { getGeminiClientApiKey, getGeminiDisabledMessage } from '../../config/aiConfig';
 
 interface Message {
     text: string;
@@ -18,17 +19,7 @@ interface HrChatbotProps {
     allEmployees: User[];
 }
 
-// Safe API Key retrieval to prevent crash in environments where process is undefined
-const getApiKey = () => {
-    try {
-        if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-            return process.env.API_KEY;
-        }
-    } catch (e) { }
-    return '';
-};
-
-const apiKey = getApiKey();
+const apiKey = getGeminiClientApiKey();
 const ai = apiKey ? new GoogleGenAI({ apiKey: apiKey }) : null;
 
 // Define the function tool for the model
@@ -71,7 +62,7 @@ const HrChatbot: React.FC<HrChatbotProps> = ({ processedData, allEmployees }) =>
     const [showSuggestions, setShowSuggestions] = useState(true);
     const chatSession = useRef<Chat | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const { addIncidents } = useErpDataActions();
+    const { addIncidents } = useFichajesMutations();
     const { motivos } = useMotivos();
 
     const initialMessage = "Asistente de RRHH potenciado por IA. Puedo analizar datos y registrar incidencias por ti. Ej: 'Registra Médico para Juan el 2023-10-25'.";
@@ -162,7 +153,7 @@ const HrChatbot: React.FC<HrChatbotProps> = ({ processedData, allEmployees }) =>
                 setMessages([{ text: initialMessage, sender: 'bot' }]);
             }
         } else if (!ai && messages.length === 0) {
-            setMessages([{ text: "⚠️ API Key no configurada. El asistente IA está desactivado.", sender: 'bot' }]);
+            setMessages([{ text: `⚠️ ${getGeminiDisabledMessage()}`, sender: 'bot' }]);
         }
     }, [processedData, messages.length, allEmployees, motivos]);
 
@@ -201,7 +192,7 @@ const HrChatbot: React.FC<HrChatbotProps> = ({ processedData, allEmployees }) =>
 
                     if (actionResult.action === 'ADD_INCIDENT') {
                         try {
-                            await addIncidents(actionResult.payload, "Chatbot AI");
+                            await addIncidents({ newRows: actionResult.payload, userName: "Chatbot AI" });
                             toolResult = { result: actionResult.successMessage };
                         } catch (err: any) {
                             toolResult = { result: `Error al guardar en ERP: ${err.message}` };

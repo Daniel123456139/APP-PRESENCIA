@@ -1,8 +1,9 @@
 
 import { useState, useCallback } from 'react';
 import { getOperarios, getControlOfPorOperario, Operario } from '../services/erpApi';
-import { getImproductiveArticle } from '../data/improductiveArticles';
+import { getImproductiveArticle, IMPRODUCTIVE_ARTICLES } from '../data/improductiveArticles';
 import { parseErpDateTime, timeToDecimalHours } from '../utils/datetime';
+import { parseLocalDateTime } from '../utils/localDate';
 
 export interface ImproductiveRow {
     operatorId: number;
@@ -29,12 +30,48 @@ export const useImproductiveReport = () => {
     const [progress, setProgress] = useState(0); // 0 to 100
     const [error, setError] = useState<string | null>(null);
 
-    const generateReportData = useCallback(async (startDate: string, endDate: string) => {
+    const generateReportData = useCallback(async (startDate: string, endDate: string, startTime: string = '00:00:00', endTime: string = '23:59:59') => {
         setLoading(true);
         setProgress(0);
         setError(null);
 
         try {
+            const rangeStart = parseLocalDateTime(startDate, startTime);
+            const rangeEnd = parseLocalDateTime(endDate, endTime);
+            rangeEnd.setMilliseconds(999);
+
+            const getClippedHours = (job: any): number => {
+                const start = parseErpDateTime(job.FechaInicio, job.HoraInicio);
+                const end = parseErpDateTime(job.FechaFin, job.HoraFin);
+                if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+
+                const clippedStart = start < rangeStart ? rangeStart : start;
+                const clippedEnd = end > rangeEnd ? rangeEnd : end;
+                return timeToDecimalHours(clippedStart, clippedEnd);
+            };
+
+            const getJobArticleId = (job: any): string => {
+                return (
+                    job?.IDArticulo ??
+                    job?.Articulo ??
+                    job?.IdArticulo ??
+                    job?.idArticulo ??
+                    job?.CodigoArticulo ??
+                    job?.CodArticulo ??
+                    ''
+                );
+            };
+
+            const getJobArticleDesc = (job: any): string => {
+                return (
+                    job?.DescArticulo ??
+                    job?.DescripcionArticulo ??
+                    job?.Descripcion ??
+                    job?.DescOperacion ??
+                    ''
+                );
+            };
+
             // 1. Fetch all active employees
             const allOperarios = await getOperarios(true); // Active only
             // Filter out 'zzz' or invalid ones if necessary, though getOperarios might handle common cases.
@@ -47,9 +84,6 @@ export const useImproductiveReport = () => {
 
             const totalOps = validOperarios.length;
             const batchSize = 15; // Optimized for performance (was 5)
-
-            // Track globally found Article IDs to generate dynamic columns later
-            const globalArticleIds = new Set<string>();
 
             const deptMap = new Map<string, DepartmentGroup>();
 
@@ -88,20 +122,18 @@ export const useImproductiveReport = () => {
                         const userBreakdown: Record<string, number> = {};
 
                         jobs.forEach(job => {
-                            const start = parseErpDateTime(job.FechaInicio, job.HoraInicio);
-                            const end = parseErpDateTime(job.FechaFin, job.HoraFin);
-                            const hours = timeToDecimalHours(start, end);
-                            const articleId = job.IDArticulo || job.Articulo || '';
+                            const hours = getClippedHours(job);
+                            const articleId = getJobArticleId(job);
+                            const articleDesc = getJobArticleDesc(job);
 
                             if (hours > 0) {
                                 userTotal += hours;
-                                const impArticle = getImproductiveArticle(articleId);
+                                const impArticle = getImproductiveArticle(articleId, articleDesc);
                                 if (impArticle) {
                                     userImprod += hours;
                                     // Track breakdown
                                     const key = impArticle.id;
                                     userBreakdown[key] = (userBreakdown[key] || 0) + hours;
-                                    globalArticleIds.add(key);
                                 }
                             }
                         });
@@ -134,7 +166,8 @@ export const useImproductiveReport = () => {
                     }
                 }));
 
-                setProgress(Math.round(((i + batchSize) / totalOps) * 100));
+                const processed = Math.min(i + batchSize, totalOps);
+                setProgress(Math.round((processed / totalOps) * 100));
             }
 
             // 3. Format Output
@@ -148,9 +181,12 @@ export const useImproductiveReport = () => {
             });
 
             setLoading(false);
+
+            const officialArticleIds = IMPRODUCTIVE_ARTICLES.map((a) => a.id);
+
             return {
                 data: sortedDepts,
-                allArticleIds: Array.from(globalArticleIds).sort()
+                allArticleIds: officialArticleIds
             };
 
         } catch (err: any) {

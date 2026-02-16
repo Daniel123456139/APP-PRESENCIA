@@ -7,6 +7,7 @@ import BarChart from '../shared/charts/BarChart';
 import DoughnutChart from '../shared/charts/DoughnutChart';
 import KpiCard from '../shared/charts/KpiCard';
 import { SvgIcon } from '../shared/Nav';
+import SmartDateInput from '../shared/SmartDateInput';
 import { toISODateLocal, parseLocalDateTime, parseISOToLocalDate } from '../../utils/localDate';
 import { normalizeDateKey, extractTimeHHMMSS } from '../../utils/datetime';
 
@@ -178,11 +179,11 @@ const VisualDashboard: React.FC<VisualDashboardProps> = ({ erpData, users }) => 
                     </div>
                     <div>
                         <label htmlFor="vis-fechaInicio" className="block text-sm font-medium text-slate-700">Fecha Inicio</label>
-                        <input type="date" id="vis-fechaInicio" value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm" />
+                        <SmartDateInput id="vis-fechaInicio" value={fechaInicio} onChange={setFechaInicio} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm" />
                     </div>
                     <div>
                         <label htmlFor="vis-fechaFin" className="block text-sm font-medium text-slate-700">Fecha Fin</label>
-                        <input type="date" id="vis-fechaFin" value={fechaFin} onChange={e => setFechaFin(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm" />
+                        <SmartDateInput id="vis-fechaFin" value={fechaFin} onChange={setFechaFin} className="mt-1 block w-full py-2 px-3 border border-slate-300 bg-white text-slate-900 rounded-md shadow-sm" />
                     </div>
                 </div>
                 <div className="mt-4 flex justify-end">

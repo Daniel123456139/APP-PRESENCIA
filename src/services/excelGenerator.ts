@@ -10,7 +10,7 @@ export const generateImproductivosExcel = async (
     // 1. Create Workbook and Worksheet
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet('Improductivos', {
-        views: [{ state: 'frozen', ySplit: 1, xSplit: 0, activePane: 'bottomLeft' }]
+        views: [{ state: 'frozen', ySplit: 1, xSplit: 0 }]
     });
 
     // 2. Define Columns
@@ -88,7 +88,9 @@ export const generateImproductivosExcel = async (
                 total: parseFloat(emp.totalHours.toFixed(2)),
                 improd: parseFloat(emp.improductiveHours.toFixed(2)),
                 prod: parseFloat(emp.productiveHours.toFixed(2)),
-                percent: emp.totalHours > 0 ? (emp.improductiveHours / emp.totalHours) : 0,
+                percent: (emp.improductiveHours + emp.productiveHours) > 0
+                    ? (emp.improductiveHours / (emp.improductiveHours + emp.productiveHours))
+                    : 0,
                 desc: group.departmentName
             };
 
@@ -141,7 +143,9 @@ export const generateImproductivosExcel = async (
             total: parseFloat(group.totalHours.toFixed(2)),
             improd: parseFloat(group.totalImproductive.toFixed(2)),
             prod: parseFloat(group.totalProductive.toFixed(2)),
-            percent: group.totalHours > 0 ? (group.totalImproductive / group.totalHours) : 0,
+            percent: (group.totalImproductive + group.totalProductive) > 0
+                ? (group.totalImproductive / (group.totalImproductive + group.totalProductive))
+                : 0,
             desc: ''
         };
 
@@ -198,7 +202,9 @@ export const generateImproductivosExcel = async (
         total: parseFloat(grandTotalHours.toFixed(2)),
         improd: parseFloat(grandTotalImproductive.toFixed(2)),
         prod: parseFloat(grandTotalProductive.toFixed(2)),
-        percent: grandTotalHours > 0 ? (grandTotalImproductive / grandTotalHours) : 0,
+        percent: (grandTotalImproductive + grandTotalProductive) > 0
+            ? (grandTotalImproductive / (grandTotalImproductive + grandTotalProductive))
+            : 0,
         desc: ''
     };
 

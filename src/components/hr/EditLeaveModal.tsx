@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { LeaveRange } from '../../types';
 import { useMotivos } from '../../hooks/useErp';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface EditLeaveModalProps {
     isOpen: boolean;
@@ -129,19 +130,17 @@ const EditLeaveModal: React.FC<EditLeaveModalProps> = ({ isOpen, onClose, range,
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium text-slate-700">Desde</label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
+                                onChange={setStartDate}
                                 className="mt-1 block w-full border-slate-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                             />
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-slate-700">Hasta</label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
+                                onChange={setEndDate}
                                 className="mt-1 block w-full border-slate-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                             />
                         </div>

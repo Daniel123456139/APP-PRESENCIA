@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ProcessedDataRow } from '../../types';
 import { useMotivos } from '../../hooks/useErp';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface ManualIncidentModalProps {
     isOpen: boolean;
@@ -146,12 +147,11 @@ const ManualIncidentModal: React.FC<ManualIncidentModalProps> = ({
                 <div className="space-y-4">
                     <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Fecha</label>
-                        <input
-                            type="date"
+                        <SmartDateInput
                             value={date}
                             min={startDate}
                             max={endDate}
-                            onChange={(e) => setDate(e.target.value)}
+                            onChange={setDate}
                             className="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                         />
                     </div>

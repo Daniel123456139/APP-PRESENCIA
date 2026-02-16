@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { EmployeeOption } from './IncidentManager';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface FutureIncidentsModalProps {
     isOpen: boolean;
@@ -223,11 +224,10 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                             <label className="block text-sm font-medium text-slate-700 mb-2">
                                 Fecha Inicio <span className="text-red-500">*</span>
                             </label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={startDate}
                                 min="2020-01-01"
-                                onChange={(e) => setStartDate(e.target.value)}
+                                onChange={setStartDate}
                                 className="w-full rounded-md border-slate-300 shadow-sm focus:border-red-500 focus:ring-red-500"
                                 required
                             />
@@ -237,11 +237,10 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
                             <label className="block text-sm font-medium text-slate-700 mb-2">
                                 Fecha Fin <span className="text-red-500">*</span>
                             </label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={endDate}
                                 min={startDate || "2020-01-01"}
-                                onChange={(e) => setEndDate(e.target.value)}
+                                onChange={setEndDate}
                                 className="w-full rounded-md border-slate-300 shadow-sm focus:border-red-500 focus:ring-red-500"
                                 required
                             />

@@ -15,6 +15,8 @@ import {
 import { getImproductiveArticle } from '../../data/improductiveArticles';
 import { exportProductivityDashboardToPDF } from '../../services/productivityDashboardExportService';
 import { useNotification } from '../shared/NotificationContext';
+import { extractTimeHHMMSS, parseErpDateTime } from '../../utils/datetime';
+import { parseLocalDateTime } from '../../utils/localDate';
 
 interface DashboardProps {
     rows: any[];
@@ -27,42 +29,59 @@ interface DashboardProps {
     };
     startDate: string;
     endDate: string;
+    startTime?: string;
+    endTime?: string;
     department: string;
     onClose: () => void;
 }
 
-export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalStats, startDate, endDate, department, onClose }) => {
+const getJobArticleId = (job: any): string => {
+    return (
+        job?.IDArticulo ??
+        job?.Articulo ??
+        job?.IdArticulo ??
+        job?.idArticulo ??
+        job?.CodigoArticulo ??
+        job?.CodArticulo ??
+        ''
+    );
+};
+
+const getJobArticleDesc = (job: any): string => {
+    return (
+        job?.DescArticulo ??
+        job?.DescripcionArticulo ??
+        job?.Descripcion ??
+        job?.DescOperacion ??
+        ''
+    );
+};
+
+export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalStats, startDate, endDate, startTime, endTime, department, onClose }) => {
     const [filterSection, setFilterSection] = useState<string>('all');
     const { showNotification } = useNotification();
 
+    const rangeStart = useMemo(() => {
+        const time = extractTimeHHMMSS(startTime || '00:00:00') || '00:00:00';
+        return parseLocalDateTime(startDate, time);
+    }, [startDate, startTime]);
+
+    const rangeEnd = useMemo(() => {
+        const time = extractTimeHHMMSS(endTime || '23:59:59') || '23:59:59';
+        const date = parseLocalDateTime(endDate, time);
+        date.setMilliseconds(999);
+        return date;
+    }, [endDate, endTime]);
+
     const getJobDurationHours = (job: any): number => {
-        try {
-            const cleanFecha = (job.FechaInicio || '').includes('T')
-                ? job.FechaInicio.split('T')[0]
-                : job.FechaInicio;
-            let day: number, month: number, year: number;
-            if (cleanFecha.includes('/')) {
-                [day, month, year] = cleanFecha.split('/').map(Number);
-            } else {
-                [year, month, day] = cleanFecha.split('-').map(Number);
-            }
+        const start = parseErpDateTime(job.FechaInicio, job.HoraInicio);
+        const end = parseErpDateTime(job.FechaFin, job.HoraFin);
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
 
-            let cleanHora = job.HoraInicio || '00:00:00';
-            if (cleanHora.includes('T')) cleanHora = cleanHora.split('T')[1];
-            const [startHour, startMin] = cleanHora.split(':').map(Number);
-
-            let cleanHoraEnd = job.HoraFin || '00:00:00';
-            if (cleanHoraEnd.includes('T')) cleanHoraEnd = cleanHoraEnd.split('T')[1];
-            const [endHour, endMin] = cleanHoraEnd.split(':').map(Number);
-
-            const start = new Date(year, month - 1, day, startHour || 0, startMin || 0);
-            const end = new Date(year, month - 1, day, endHour || 0, endMin || 0);
-            if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
-            const duration = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-            return duration > 0 ? duration : 0;
-        } catch {
-            return 0;
-        }
+        const clippedStart = start < rangeStart ? rangeStart : start;
+        const clippedEnd = end > rangeEnd ? rangeEnd : end;
+        const duration = (clippedEnd.getTime() - clippedStart.getTime()) / (1000 * 60 * 60);
+        return duration > 0 ? duration : 0;
     };
 
     // 1. Process Data for Charts
@@ -130,11 +149,12 @@ export const ProductivityDashboard: React.FC<DashboardProps> = ({ rows, globalSt
         const map = new Map<string, { name: string; hours: number; count: number }>();
         filteredRows.forEach(row => {
             row.jobs.forEach((job: any) => {
-                const article = getImproductiveArticle(job.IDArticulo);
+                const articleId = getJobArticleId(job);
+                const article = getImproductiveArticle(articleId, getJobArticleDesc(job));
                 if (!article) return;
                 const duration = getJobDurationHours(job);
                 if (duration <= 0) return;
-                const key = job.IDArticulo;
+                const key = article.id || articleId;
                 const current = map.get(key) || { name: article.desc, hours: 0, count: 0 };
                 current.hours += duration;
                 current.count += 1;

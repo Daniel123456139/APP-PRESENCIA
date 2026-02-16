@@ -21,26 +21,52 @@ export const IMPRODUCTIVE_ARTICLES: ImproductiveArticle[] = [
     { id: 'IMPR REPINTAR', desc: 'IMPRODUCTIVO DE REPINTAR' },
     { id: 'IMPR REUNIONES', desc: 'IMPRODUCTIVO DE REUNIONES' },
     { id: 'IMPR TRANSPORTE', desc: 'IMPRODUCTIVO DE TRANSPORTE' },
-    { id: 'IMPR UTILLAJE', desc: 'IMPRODUCTIVO DE UTILLAJE' },
-    { id: 'IMPROD.ALMACEN', desc: 'TIEMPOS NO PRODUCTIVOS DE ALMACEN' },
-    { id: 'IMPROD.CALIDAD', desc: 'TIEMPOS NO PRODUCTIVOS DE CALIDAD' },
-    { id: 'IMPRODUCTIVO 11', desc: 'TIEMPO NO PRODUCTIVO' },
-    { id: 'IMPRODUCTIVO 12', desc: 'TIEMPO NO PRODUCTIVO REPASADO BOMBO' },
-    { id: 'IMPRODUCTIVOS', desc: 'TIEMPOS NO PRODUCTIVOS' },
-    { id: 'IMPRODUCTVOS 2', desc: 'REPROCESOS INTERNOS GENERALES ((JULIO-2006))' }
+    { id: 'IMPR UTILLAJE', desc: 'IMPRODUCTIVO DE UTILLAJE' }
 ];
 
 export const normalizeArticleId = (value?: string | null): string => {
     if (!value) return '';
-    return value.trim().toUpperCase();
+    return value
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
+};
+
+const normalizeToken = (value?: string | null): string => {
+    if (!value) return '';
+    return value
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '');
 };
 
 export const IMPRODUCTIVE_ARTICLE_LOOKUP = new Map(
     IMPRODUCTIVE_ARTICLES.map((item) => [normalizeArticleId(item.id), item])
 );
 
-export const getImproductiveArticle = (articleId?: string | null): ImproductiveArticle | undefined => {
+const IMPRODUCTIVE_ARTICLE_LOOKUP_BY_ID_TOKEN = new Map(
+    IMPRODUCTIVE_ARTICLES.map((item) => [normalizeToken(item.id), item])
+);
+
+const IMPRODUCTIVE_ARTICLE_LOOKUP_BY_DESC = new Map(
+    IMPRODUCTIVE_ARTICLES.map((item) => [normalizeToken(item.desc), item])
+);
+
+export const getImproductiveArticle = (articleId?: string | null, articleDesc?: string | null): ImproductiveArticle | undefined => {
     const key = normalizeArticleId(articleId);
-    if (!key) return undefined;
-    return IMPRODUCTIVE_ARTICLE_LOOKUP.get(key);
+    if (key) {
+        const exact = IMPRODUCTIVE_ARTICLE_LOOKUP.get(key);
+        if (exact) return exact;
+
+        const tokenMatch = IMPRODUCTIVE_ARTICLE_LOOKUP_BY_ID_TOKEN.get(normalizeToken(key));
+        if (tokenMatch) return tokenMatch;
+    }
+
+    const descToken = normalizeToken(articleDesc);
+    if (descToken) {
+        return IMPRODUCTIVE_ARTICLE_LOOKUP_BY_DESC.get(descToken);
+    }
+
+    return undefined;
 };

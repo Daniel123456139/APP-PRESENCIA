@@ -1,77 +1,41 @@
-
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getMotivosAusencias, getCalendarioEmpresa, getOperarios, MotivoAusencia, CalendarioDia, Operario } from '../services/erpApi';
+import { useMemo } from 'react';
 
-// Simple in-memory cache
-const cache = {
-    motivos: null as MotivoAusencia[] | null,
-    operarios: null as Operario[] | null,
-    calendario: new Map<string, CalendarioDia[]>() // key: `${start}-${end}`
+// --- Keys ---
+export const ERP_KEYS = {
+    motivos: ['motivos'] as const,
+    operarios: ['operarios'] as const,
+    calendario: (start: string, end: string) => ['calendario', { start, end }] as const,
 };
 
+// --- Hooks ---
+
 export const useMotivos = () => {
-    const [motivos, setMotivos] = useState<MotivoAusencia[]>(cache.motivos || []);
-    const [loading, setLoading] = useState(!cache.motivos);
-    const [error, setError] = useState<string | null>(null);
+    const { data, isLoading, error, refetch } = useQuery({
+        queryKey: ERP_KEYS.motivos,
+        queryFn: getMotivosAusencias,
+        staleTime: 1000 * 60 * 60 * 24, // 24 horas (datos maestros muy estáticos)
+    });
 
-    const fetchMotivos = useCallback(async (force = false) => {
-        if (!force && cache.motivos) {
-            setMotivos(cache.motivos);
-            return;
-        }
-        setLoading(true);
-        try {
-            const data = await getMotivosAusencias();
-            cache.motivos = data;
-            setMotivos(data);
-            setError(null);
-        } catch (err: any) {
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        fetchMotivos();
-    }, [fetchMotivos]);
-
-    return { motivos, loading, error, refresh: () => fetchMotivos(true) };
+    return {
+        motivos: data || [],
+        loading: isLoading,
+        error: error ? (error as Error).message : null,
+        refresh: refetch
+    };
 };
 
 export const useOperarios = (onlyActive = true) => {
-    const [operarios, setOperarios] = useState<Operario[]>(cache.operarios || []);
-    const [loading, setLoading] = useState(!cache.operarios);
-    const [error, setError] = useState<string | null>(null);
+    const { data, isLoading, error, refetch } = useQuery({
+        queryKey: ERP_KEYS.operarios,
+        queryFn: () => getOperarios(),
+        staleTime: 1000 * 60 * 5, // 5 minutos
+    });
 
-    const fetchOperarios = useCallback(async (force = false) => {
-        if (!force && cache.operarios) {
-            const missingFlexible = cache.operarios.some(op => (op as any).Flexible === undefined);
-            if (!missingFlexible) {
-                setOperarios(cache.operarios);
-                return;
-            }
-        }
-        setLoading(true);
-        try {
-            const data = await getOperarios();
-            cache.operarios = data;
-            setOperarios(data);
-            setError(null);
-        } catch (err: any) {
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        fetchOperarios();
-    }, [fetchOperarios]);
-
-    // Filtrado mejorado: Excluir inactivos, empleados con "zzz" y ID 999
     const filteredOperarios = useMemo(() => {
-        return operarios.filter(op => {
+        if (!data) return [];
+        return data.filter(op => {
             // Excluir ID 999
             if (op.IDOperario === 999) return false;
 
@@ -83,42 +47,28 @@ export const useOperarios = (onlyActive = true) => {
 
             return true;
         });
-    }, [operarios, onlyActive]);
+    }, [data, onlyActive]);
 
-    return { operarios: filteredOperarios, loading, error, refresh: () => fetchOperarios(true) };
-
+    return {
+        operarios: filteredOperarios,
+        loading: isLoading,
+        error: error ? (error as Error).message : null,
+        refresh: refetch
+    };
 };
 
 export const useCalendario = (startDate: string, endDate: string) => {
-    const [calendario, setCalendario] = useState<CalendarioDia[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
+    const { data, isLoading, error, refetch } = useQuery({
+        queryKey: ERP_KEYS.calendario(startDate, endDate),
+        queryFn: () => getCalendarioEmpresa(startDate, endDate),
+        enabled: !!startDate && !!endDate, // Solo ejecutar si hay fechas
+        staleTime: 1000 * 60 * 10, // 10 minutos
+    });
 
-    const fetchCalendario = useCallback(async (start: string, end: string, force = false) => {
-        const key = `${start}-${end}`;
-        if (!force && cache.calendario.has(key)) {
-            setCalendario(cache.calendario.get(key)!);
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const data = await getCalendarioEmpresa(start, end);
-            cache.calendario.set(key, data);
-            setCalendario(data);
-            setError(null);
-        } catch (err: any) {
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        if (startDate && endDate) {
-            fetchCalendario(startDate, endDate);
-        }
-    }, [startDate, endDate, fetchCalendario]);
-
-    return { calendario, loading, error, refresh: () => fetchCalendario(startDate, endDate, true) };
+    return {
+        calendario: data || [],
+        loading: isLoading,
+        error: error ? (error as Error).message : null,
+        refresh: refetch
+    };
 };

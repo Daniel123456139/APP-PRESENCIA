@@ -17,6 +17,7 @@ import { normalizeDateKey, extractTimeHHMM, extractTimeHHMMSS, parseErpDateTime 
 import { parseLocalDateTime } from '../utils/localDate';
 import { useImproductiveReport } from '../hooks/useImproductiveReport';
 import { generateImproductivosExcel } from '../services/excelGenerator';
+import SmartDateInput from '../components/shared/SmartDateInput';
 
 
 
@@ -43,6 +44,28 @@ const formatShortDate = (dateStr: string): string => {
     } catch {
         return dateStr;
     }
+};
+
+const getJobArticleId = (job: any): string => {
+    return (
+        job?.IDArticulo ??
+        job?.Articulo ??
+        job?.IdArticulo ??
+        job?.idArticulo ??
+        job?.CodigoArticulo ??
+        job?.CodArticulo ??
+        ''
+    );
+};
+
+const getJobArticleDesc = (job: any): string => {
+    return (
+        job?.DescArticulo ??
+        job?.DescripcionArticulo ??
+        job?.Descripcion ??
+        job?.DescOperacion ??
+        ''
+    );
 };
 
 interface JobManagementProps {
@@ -444,7 +467,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                 const d = differenceInMinutes(clipped.end, clipped.start);
                 if (d > 0) {
                     totalJobTimeMinutes += d;
-                    if (getImproductiveArticle(job.IDArticulo)) {
+                    if (getImproductiveArticle(getJobArticleId(job), getJobArticleDesc(job))) {
                         improductiveTimeMinutes += d;
                     }
                 }
@@ -586,7 +609,12 @@ export const JobManagement: React.FC<JobManagementProps> = ({
         try {
             // 1. Fetch and processed data using the hook
             // Updated to match new return type { data, allArticleIds }
-            const result = await generateReportData(startDate, endDate);
+            const result = await generateReportData(
+                startDate,
+                endDate,
+                extractTimeHHMMSS(startTime || '00:00:00') || '00:00:00',
+                extractTimeHHMMSS(endTime || '23:59:59') || '23:59:59'
+            );
 
             // 2. Generate Excel
             if (result && result.data && result.data.length > 0) {
@@ -731,20 +759,18 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                     <div className="flex flex-wrap items-end gap-3 custom-filters">
                         <div>
                             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Desde</label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                onChange={setStartDate}
+                                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none w-[180px]"
                             />
                         </div>
                         <div>
                             <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Hasta</label>
-                            <input
-                                type="date"
+                            <SmartDateInput
                                 value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                onChange={setEndDate}
+                                className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none w-[180px]"
                             />
                         </div>
 
@@ -835,16 +861,16 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                             </div>
                         ) : null}
 
-                        {loadingExcel && excelProgress ? (
+                        {loadingExcel && excelProgress > 0 ? (
                             <div className="min-w-[220px]">
                                 <div className="flex items-center justify-between text-[11px] text-slate-500 mb-1">
-                                    <span>Generando Excel {excelProgress.current}/{excelProgress.total}</span>
-                                    <span>{Math.round((excelProgress.current / excelProgress.total) * 100)}%</span>
+                                    <span>Generando Excel</span>
+                                    <span>{excelProgress}%</span>
                                 </div>
                                 <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
                                     <div
                                         className="h-full bg-emerald-500 transition-all"
-                                        style={{ width: `${Math.round((excelProgress.current / excelProgress.total) * 100)}%` }}
+                                        style={{ width: `${excelProgress}%` }}
                                     />
                                 </div>
                             </div>
@@ -1183,7 +1209,8 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                                                             const duration = !isNaN(start.getTime()) && !isNaN(end.getTime())
                                                                 ? differenceInMinutes(end, start) / 60
                                                                 : 0;
-                                                            const improductiveInfo = getImproductiveArticle(job.IDArticulo);
+                                                            const articleId = getJobArticleId(job);
+                                                            const improductiveInfo = getImproductiveArticle(articleId, getJobArticleDesc(job));
 
                                                             return (
                                                                 <tr key={idx} className={`hover:bg-white transition-colors ${improductiveInfo ? 'bg-amber-50/60' : ''}`}>
@@ -1191,7 +1218,7 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                                                                     <td className="px-4 py-3 border-b border-slate-100">{job.DescOperacion}</td>
                                                                     <td className="px-4 py-3 border-b border-slate-100 text-xs">
                                                                         <div className="flex items-center gap-2">
-                                                                            <span>{job.IDArticulo}</span>
+                                                                            <span>{articleId}</span>
                                                                             {improductiveInfo && (
                                                                                 <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 uppercase tracking-wider">
                                                                                     Improductivo
@@ -1264,6 +1291,8 @@ export const JobManagement: React.FC<JobManagementProps> = ({
                     globalStats={globalStats}
                     startDate={startDate}
                     endDate={endDate}
+                    startTime={extractTimeHHMMSS(startTime || '00:00:00') || '00:00:00'}
+                    endTime={extractTimeHHMMSS(endTime || '23:59:59') || '23:59:59'}
                     department={selectedDepartment}
                     onClose={() => setShowDashboard(false)}
                 />

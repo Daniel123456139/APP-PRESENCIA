@@ -1,254 +1,212 @@
-
 import React, { useState, useMemo } from 'react';
+import { useHrLayout } from './HrLayout';
+import {
+    Calendar,
+    User,
+    Trash2,
+    Search,
+    CheckCircle,
+    Clock,
+    AlertCircle,
+    Filter,
+    History
+} from 'lucide-react';
 import { IncidentLogEntry } from '../../types';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface IncidentHistoryPanelProps {
     incidentLog: IncidentLogEntry[];
-    onDelete?: (id: string) => void;
+    onDelete: (id: string) => void;
 }
 
 const IncidentHistoryPanel: React.FC<IncidentHistoryPanelProps> = ({ incidentLog, onDelete }) => {
+    const { employeeOptions } = useHrLayout();
+
     const [filterDate, setFilterDate] = useState('');
     const [filterEmployee, setFilterEmployee] = useState('');
     const [filterType, setFilterType] = useState('all');
 
-    // Tipos únicos de la lista actual
     const uniqueTypes = useMemo(() => {
-        const types = new Set(incidentLog.map(i => i.type));
+        const types = new Set(incidentLog.map(entry => entry.type));
         return Array.from(types);
     }, [incidentLog]);
 
-    // Empleados únicos para filtro
-    const uniqueEmployees = useMemo(() => {
-        const map = new Map<number, string>();
-        incidentLog.forEach(i => {
-            if (!map.has(i.employeeId)) {
-                // Format: [ID] Name
-                const formattedName = `[${i.employeeId.toString().padStart(3, '0')}] ${i.employeeName}`;
-                map.set(i.employeeId, formattedName);
-            }
-        });
-        return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-    }, [incidentLog]);
-
-    // Filtrado
     const filteredLog = useMemo(() => {
-        return incidentLog.filter(entry => {
-            // Filtro por fecha afectada
-            if (filterDate && entry.dates !== filterDate) return false;
-            // Filtro por empleado
-            if (filterEmployee && entry.employeeId !== parseInt(filterEmployee, 10)) return false;
-            // Filtro por tipo
-            if (filterType !== 'all' && entry.type !== filterType) return false;
-            return true;
-        });
+        return incidentLog
+            .filter(entry => {
+                if (filterDate && entry.dates !== filterDate) return false;
+                if (filterEmployee && entry.employeeId !== parseInt(filterEmployee, 10)) return false;
+                if (filterType !== 'all' && entry.type !== filterType) return false;
+                return true;
+            })
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }, [incidentLog, filterDate, filterEmployee, filterType]);
 
-    // Agrupado por fecha de registro (día)
-    const groupedByDate = useMemo(() => {
-        const groups = new Map<string, IncidentLogEntry[]>();
-
-        filteredLog.forEach(entry => {
-            // Extraer solo la fecha del timestamp (asumimos formato "DD/MM/YYYY, HH:MM:SS" o similar)
-            const datePart = entry.timestamp?.split(',')[0] || entry.timestamp?.split(' ')[0] || 'Fecha Desconocida';
-            if (!groups.has(datePart)) {
-                groups.set(datePart, []);
-            }
-            groups.get(datePart)!.push(entry);
+    const groupedLogs = useMemo(() => {
+        const groups: Record<string, IncidentLogEntry[]> = {};
+        filteredLog.forEach(log => {
+            const date = log.dates || 'Sin fecha';
+            if (!groups[date]) groups[date] = [];
+            groups[date].push(log);
         });
-
-        // Ordenar por fecha descendente (más recientes primero)
-        const sorted = Array.from(groups.entries()).sort((a, b) => {
-            // Convertir a fecha para comparar
-            const parseDate = (str: string) => {
-                const parts = str.split('/');
-                if (parts.length === 3) {
-                    return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-                }
-                return new Date(str);
-            };
-            return parseDate(b[0]).getTime() - parseDate(a[0]).getTime();
-        });
-
-        return sorted;
+        return groups;
     }, [filteredLog]);
 
-    // Estadísticas
-    const stats = useMemo(() => ({
-        total: incidentLog.length,
-        filtrados: filteredLog.length,
-        diasUnicos: new Set(incidentLog.map(i => i.dates)).size
-    }), [incidentLog, filteredLog]);
+    const sortedDates = useMemo(() => {
+        return Object.keys(groupedLogs).sort((a, b) => b.localeCompare(a));
+    }, [groupedLogs]);
 
-    const clearFilters = () => {
-        setFilterDate('');
-        setFilterEmployee('');
-        setFilterType('all');
+    const getEmployeeName = (id: number, fallback?: string) => {
+        const emp = employeeOptions.find(e => e.id === id);
+        return emp ? emp.name : (fallback || `Operario ${id}`);
+    };
+
+    const getTypeIcon = (type: string) => {
+        switch (type.toLowerCase()) {
+            case 'incidencia':
+                return <CheckCircle className="text-green-500" size={18} />;
+            case 'ajuste':
+                return <Clock className="text-blue-500" size={18} />;
+            case 'error':
+                return <AlertCircle className="text-red-500" size={18} />;
+            default:
+                return <AlertCircle className="text-slate-400" size={18} />;
+        }
     };
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-                <div className="flex items-center justify-between mb-4">
-                    <div>
-                        <h2 className="text-xl font-bold text-slate-800">📋 Historial de Incidencias</h2>
-                        <p className="text-sm text-slate-500">Registro de todas las incidencias justificadas en la aplicación</p>
-                    </div>
-                    <div className="flex gap-4">
-                        <div className="text-center px-4 py-2 bg-blue-50 rounded-lg">
-                            <p className="text-2xl font-bold text-blue-700">{stats.total}</p>
-                            <p className="text-xs text-blue-600">Total</p>
-                        </div>
-                        <div className="text-center px-4 py-2 bg-green-50 rounded-lg">
-                            <p className="text-2xl font-bold text-green-700">{stats.diasUnicos}</p>
-                            <p className="text-xs text-green-600">Días afectados</p>
-                        </div>
-                    </div>
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Historial de Incidencias</h2>
+                    <p className="text-slate-500">Registro de acciones realizadas en el portal</p>
                 </div>
+                <div className="flex items-center space-x-2 bg-white px-4 py-2 rounded-lg border border-slate-200">
+                    <History className="text-blue-500" size={20} />
+                    <span className="font-semibold text-slate-700">{incidentLog.length}</span>
+                    <span className="text-slate-500 text-sm">Registros totales</span>
+                </div>
+            </div>
 
-                {/* Filtros */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 pt-4 border-t border-slate-100">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Fecha Afectada</label>
-                        <input
-                            type="date"
-                            value={filterDate}
-                            onChange={e => setFilterDate(e.target.value)}
-                            className="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        />
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center space-x-2 mb-4 text-slate-700 font-medium">
+                    <Filter size={18} />
+                    <span>Filtros de busqueda</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500 uppercase px-1">Fecha Afectada</label>
+                        <div className="relative">
+                            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                            <SmartDateInput
+                                value={filterDate}
+                                onChange={setFilterDate}
+                                className="w-full pl-10 pr-10 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 bg-slate-50"
+                            />
+                        </div>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Empleado</label>
-                        <select
-                            value={filterEmployee}
-                            onChange={e => setFilterEmployee(e.target.value)}
-                            className="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        >
-                            <option value="">Todos</option>
-                            {uniqueEmployees.map(([id, name]) => (
-                                <option key={id} value={id}>{name}</option>
-                            ))}
-                        </select>
+
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500 uppercase px-1">Operario</label>
+                        <div className="relative">
+                            <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                            <select
+                                value={filterEmployee}
+                                onChange={(e) => setFilterEmployee(e.target.value)}
+                                className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 bg-slate-50 appearance-none"
+                            >
+                                <option value="">Todos los empleados</option>
+                                {employeeOptions.map(emp => (
+                                    <option key={emp.id} value={emp.id}>{emp.name}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Tipo</label>
-                        <select
-                            value={filterType}
-                            onChange={e => setFilterType(e.target.value)}
-                            className="w-full rounded-md border-slate-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        >
-                            <option value="all">Todos</option>
-                            {uniqueTypes.map(t => (
-                                <option key={t} value={t}>{t}</option>
-                            ))}
-                        </select>
-                    </div>
-                    <div className="flex items-end">
-                        <button
-                            onClick={clearFilters}
-                            className="w-full px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
-                        >
-                            Limpiar Filtros
-                        </button>
+
+                    <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-500 uppercase px-1">Tipo Accion</label>
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                            <select
+                                value={filterType}
+                                onChange={(e) => setFilterType(e.target.value)}
+                                className="w-full pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 bg-slate-50 appearance-none"
+                            >
+                                <option value="all">Todos los tipos</option>
+                                {uniqueTypes.map(type => (
+                                    <option key={type} value={type}>{type}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* Lista agrupada por día */}
-            {filteredLog.length === 0 ? (
-                <div className="bg-white p-12 rounded-xl shadow-sm border border-slate-200 text-center">
-                    <svg className="w-16 h-16 mx-auto text-slate-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <h3 className="text-lg font-medium text-slate-600">No hay incidencias registradas</h3>
-                    <p className="text-sm text-slate-400 mt-1">
-                        {incidentLog.length > 0
-                            ? 'Prueba a modificar los filtros'
-                            : 'Las incidencias aparecerán aquí cuando las registres'}
-                    </p>
-                </div>
-            ) : (
-                <div className="space-y-4">
-                    {groupedByDate.map(([date, entries]) => (
-                        <div key={date} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                            {/* Cabecera del grupo (día) */}
-                            <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-lg">📅</span>
-                                    <h3 className="font-semibold text-slate-700">Registrado el {date}</h3>
-                                </div>
-                                <span className="text-sm font-medium text-slate-500 bg-white px-2 py-1 rounded">
-                                    {entries.length} incidencia{entries.length !== 1 ? 's' : ''}
+            <div className="space-y-8">
+                {sortedDates.length === 0 ? (
+                    <div className="bg-white rounded-xl border border-slate-200 border-dashed p-12 text-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                            <History size={32} className="text-slate-300" />
+                        </div>
+                        <h3 className="text-lg font-medium text-slate-900">No hay registros</h3>
+                        <p className="text-slate-500 mt-1">No se encontraron incidencias que coincidan con los filtros aplicados.</p>
+                        {(filterDate || filterEmployee || filterType !== 'all') && (
+                            <button
+                                onClick={() => { setFilterDate(''); setFilterEmployee(''); setFilterType('all'); }}
+                                className="mt-4 text-blue-600 hover:text-blue-700 font-medium"
+                            >
+                                Limpiar filtros
+                            </button>
+                        )}
+                    </div>
+                ) : (
+                    sortedDates.map(date => (
+                        <div key={date} className="space-y-3">
+                            <div className="flex items-center space-x-2">
+                                <div className="h-px flex-1 bg-slate-200"></div>
+                                <span className="text-sm font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-full border border-slate-200">
+                                    {date}
                                 </span>
+                                <div className="h-px flex-1 bg-slate-200"></div>
                             </div>
 
-                            {/* Tabla de incidencias del día */}
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-slate-200">
-                                    <thead className="bg-slate-50">
-                                        <tr>
-                                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Hora</th>
-                                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Empleado</th>
-                                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Tipo</th>
-                                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Motivo</th>
-                                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Fecha Afectada</th>
-                                            <th className="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Origen</th>
-                                            <th className="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Acciones</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="bg-white divide-y divide-slate-100">
-                                        {entries.map(entry => {
-                                            const timePart = entry.timestamp?.split(',')[1]?.trim() || entry.timestamp?.split(' ')[1] || '--:--';
-                                            return (
-                                                <tr key={entry.id} className="hover:bg-slate-50 transition-colors">
-                                                    <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">
-                                                        <span className="font-mono">{timePart}</span>
-                                                    </td>
-                                                    <td className="px-4 py-3 text-sm font-medium text-slate-800 whitespace-nowrap">
-                                                        {`[${entry.employeeId.toString().padStart(3, '0')}] ${entry.employeeName}`}
-                                                    </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap">
-                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${entry.type.includes('Gap') ? 'bg-amber-100 text-amber-800' :
-                                                            entry.type.includes('Ausencia') ? 'bg-red-100 text-red-800' :
-                                                                'bg-blue-100 text-blue-800'
-                                                            }`}>
-                                                            {entry.type}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-4 py-3 text-sm text-slate-700">
+                            <div className="space-y-2">
+                                {groupedLogs[date].map(entry => (
+                                    <div key={entry.id} className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+                                        <div className="flex items-start justify-between gap-4">
+                                            <div className="flex items-start gap-3">
+                                                <div className="mt-0.5">{getTypeIcon(entry.type)}</div>
+                                                <div className="space-y-1">
+                                                    <div className="font-semibold text-slate-800">
+                                                        {getEmployeeName(entry.employeeId, entry.employeeName)}
+                                                        <span className="text-xs text-slate-400 ml-2">{entry.type}</span>
+                                                    </div>
+                                                    <div className="text-xs text-slate-500">
                                                         {entry.reason}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-sm text-slate-600 whitespace-nowrap">
-                                                        {entry.dates}
-                                                    </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap">
-                                                        <span className={`text-xs px-2 py-0.5 rounded ${entry.source === 'Registrar Incidencia'
-                                                            ? 'bg-purple-50 text-purple-700'
-                                                            : 'bg-slate-100 text-slate-600'
-                                                            }`}>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                                                        <span>{new Date(entry.timestamp).toLocaleString()}</span>
+                                                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
                                                             {entry.source}
                                                         </span>
-                                                    </td>
-                                                    <td className="px-4 py-3 whitespace-nowrap text-right text-sm font-medium">
-                                                        <button
-                                                            onClick={() => onDelete && onDelete(String(entry.id))}
-                                                            className="text-red-600 hover:text-red-900 transition-colors p-1 rounded hover:bg-red-50"
-                                                            title="Eliminar registro del historial"
-                                                        >
-                                                            🗑️
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <button
+                                                onClick={() => onDelete(String(entry.id))}
+                                                className="text-red-600 hover:text-red-900 transition-colors p-2 rounded hover:bg-red-50"
+                                                title="Eliminar registro del historial"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
                         </div>
-                    ))}
-                </div>
-            )}
+                    ))
+                )}
+            </div>
         </div>
     );
 };

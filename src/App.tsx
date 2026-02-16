@@ -1,5 +1,6 @@
 import React, { useState, createContext, useMemo, useCallback, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import LoginComponent from './components/LoginComponent';
 import HrLayout from './components/hr/HrLayout';
 import HrDashboardPage from './components/hr/pages/HrDashboardPage';
@@ -19,13 +20,15 @@ import InitialConfigComponent from './components/core/InitialConfigComponent';
 import { User, Role, RawDataRow, BlogPost, Shift, SickLeave, IncidentLogEntry, CompanyHoliday, FutureAbsence } from './types';
 import { MOCK_BLOG_POSTS } from './data/mockBlog';
 import { NotificationProvider, useNotification } from './components/shared/NotificationContext';
-import { ErpDataProvider, useErpDataActions, useErpDataState } from './store/erpDataStore';
+// import { ErpDataProvider, useErpDataActions, useErpDataState } from './store/erpDataStore'; // DEPRECATED
+import { useFichajes } from './hooks/useFichajes';
+import { useCalendario } from './hooks/useErp';
 import RealtimeNotificationsBridge from './components/shared/RealtimeNotificationsBridge';
 import GlobalStatusPanel from './components/shared/GlobalStatusPanel';
 import { AuditBridge } from './services/AuditBridge';
-import { SickLeaveMetadataService } from './services/sickLeaveMetadataService'; // 🆕 IMPORT
-import { fetchFichajes } from './services/apiService';
-import { getCalendarioEmpresa, CalendarioDia } from './services/erpApi';
+import { SickLeaveMetadataService } from './services/sickLeaveMetadataService';
+// import { fetchFichajes } from './services/apiService'; // Handled by hook
+// import { getCalendarioEmpresa, CalendarioDia } from './services/erpApi'; // Handled by hook
 import { SyncService } from './services/syncService';
 import { encryptStorageData, decryptStorageData } from './services/encryptionService';
 import { getAuth, signInAnonymously } from 'firebase/auth';
@@ -48,12 +51,29 @@ export const DataContext = createContext<DataContextType>({ erpData: [], shifts:
 // Wrapper to use useNavigate hook
 const MainRoutes: React.FC = () => {
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const [loginRole, setLoginRole] = useState<'HR' | null>(null);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-    // Read from Store
-    const { erpData } = useErpDataState();
-    const { setErpData } = useErpDataActions();
+    // Global Filter State
+    const [globalFilterState, setGlobalFilterState] = useState<{
+        startDate: string;
+        endDate: string;
+        startTime: string;
+        endTime: string;
+    } | null>(null);
+
+    // React Query Hooks
+    const { erpData, isLoading: loadingFichajes, error: errorFichajes } = useFichajes(
+        globalFilterState?.startDate || '',
+        globalFilterState?.endDate || ''
+    );
+
+    const { calendario, loading: loadingCalendario, error: errorCalendario } = useCalendario(
+        globalFilterState?.startDate || '',
+        globalFilterState?.endDate || ''
+    );
+
     const { showNotification } = useNotification();
 
     const [analysisResult, setAnalysisResult] = useState<string>('');
@@ -64,7 +84,6 @@ const MainRoutes: React.FC = () => {
     const [incidentLog, setIncidentLog] = useState<IncidentLogEntry[]>(() => {
         try {
             const saved = localStorage.getItem('incidentLog');
-            // Security: Use decryptStorageData which handles both encrypted and legacy plain JSON
             return saved ? (decryptStorageData(saved) || []) : [];
         } catch (e) {
             console.error('Error parsing incidentLog from localStorage', e);
@@ -74,27 +93,35 @@ const MainRoutes: React.FC = () => {
 
     // Persist incidentLog changes
     useEffect(() => {
-        // Security: Encrypt before saving to localStorage
         localStorage.setItem('incidentLog', encryptStorageData(incidentLog));
     }, [incidentLog]);
 
-    const [companyHolidays, setCompanyHolidays] = useState<CompanyHoliday[]>([]);
-    const [companyCalendarDays, setCompanyCalendarDays] = useState<CalendarioDia[]>([]);
+    // Derived States
+    const companyCalendarDays = calendario;
+    const companyHolidays = useMemo(() => {
+        return calendario
+            .filter(d => d.TipoDia === "1")
+            .map((d, index) => ({
+                id: index + 1,
+                date: d.Fecha,
+                description: d.DescTurno || 'Festivo'
+            }));
+    }, [calendario]);
 
-    // Estado para mantener la persistencia de las fechas y HORAS seleccionadas al inicio
-    const [globalFilterState, setGlobalFilterState] = useState<{
-        startDate: string;
-        endDate: string;
-        startTime: string;
-        endTime: string;
-    } | null>(null);
+    // Error Handling
+    useEffect(() => {
+        if (errorFichajes) showNotification(`Error cargando fichajes: ${errorFichajes}`, 'error');
+        if (errorCalendario) showNotification(`Error cargando calendario: ${errorCalendario}`, 'warning');
+    }, [errorFichajes, errorCalendario, showNotification]);
 
     useEffect(() => {
         AuditBridge.init();
-        SickLeaveMetadataService.init(); // 🆕 INICIALIZACIÓN
+        SickLeaveMetadataService.init();
         const handleOnline = async () => {
             showNotification("Conexión restablecida. Sincronizando datos pendientes...", "success");
             await SyncService.processQueue();
+            // Invalidate queries to refresh data after sync
+            queryClient.invalidateQueries({ queryKey: ['fichajes'] });
         };
         const handleOffline = () => {
             showNotification("Se ha perdido la conexión. Trabajando en modo Offline.", "warning");
@@ -105,27 +132,9 @@ const MainRoutes: React.FC = () => {
             window.removeEventListener('online', handleOnline);
             window.removeEventListener('offline', handleOffline);
         };
-    }, [showNotification]);
+    }, [showNotification, queryClient]);
 
-    // 🟢 SYNCHRONIZATION POLLING (Every 60s)
-    useEffect(() => {
-        if (!globalFilterState || !currentUser) return;
-
-        const intervalId = setInterval(() => {
-            if (navigator.onLine) {
-                console.log("🔄 [AutoSync] Refreshing data...");
-                executeDataLoad(
-                    globalFilterState.startDate,
-                    globalFilterState.endDate,
-                    globalFilterState.startTime,
-                    globalFilterState.endTime
-                ).catch(err => console.error("AutoSync failed:", err));
-            }
-        }, 60000); // 60 seconds
-
-        return () => clearInterval(intervalId);
-    }, [globalFilterState, currentUser]); // Dependency ensures restart if filter changes
-
+    // Firebase Auth
     useEffect(() => {
         let cancelled = false;
         const initFirebaseAuth = async () => {
@@ -139,9 +148,9 @@ const MainRoutes: React.FC = () => {
                 if (cancelled) return;
                 console.error('Firebase anonymous auth failed:', error);
                 if (error.code === 'auth/admin-restricted-operation') {
-                    showNotification('Error: Autenticación Anónima deshabilitada en Firebase Console. Habilítala en Authentication > Sign-in method.', 'error');
+                    showNotification('Error: Autenticación Anónima deshabilitada en Firebase Console.', 'error');
                 } else {
-                    showNotification('No se pudo autenticar en Firebase; histórico de bajas puede no estar disponible', 'error');
+                    showNotification('No se pudo autenticar en Firebase.', 'error');
                 }
             }
         };
@@ -168,47 +177,20 @@ const MainRoutes: React.FC = () => {
     const handleInitialConfigContinue = async (startDate: string, endDate: string, startTime: string, endTime: string) => {
         setGlobalFilterState({ startDate, endDate, startTime, endTime });
         navigate('/processing');
-        await executeDataLoad(startDate, endDate, startTime, endTime);
+        // Data loading is triggered automatically by hooks when state changes
     };
 
-    const executeDataLoad = async (startDate: string, endDate: string, startTime: string, endTime: string) => {
-        try {
-            const [fichajesResult, calendarResult] = await Promise.allSettled([
-                fetchFichajes(startDate, endDate, '', '', ''),
-                getCalendarioEmpresa(startDate, endDate)
-            ]);
-
-            if (fichajesResult.status === 'fulfilled') {
-                setErpData(fichajesResult.value);
-            } else {
-                console.error("Error loading Fichajes:", fichajesResult.reason);
-                showNotification(`Error cargando fichajes: ${fichajesResult.reason?.message || 'Desconocido'}`, 'error');
-                setErpData([]);
-            }
-
-            if (calendarResult.status === 'fulfilled') {
-                const calendarData = calendarResult.value;
-                setCompanyCalendarDays(calendarData);
-                const holidays: CompanyHoliday[] = calendarData
-                    .filter(d => d.TipoDia === "1")
-                    .map((d, index) => ({
-                        id: index + 1,
-                        date: d.Fecha,
-                        description: d.DescTurno || 'Festivo'
-                    }));
-                setCompanyHolidays(holidays);
-            } else {
-                console.warn("Error loading Calendar:", calendarResult.reason);
-                showNotification("No se pudo cargar el calendario de festivos. Algunos datos pueden ser inexactos.", 'warning');
-                setCompanyHolidays([]);
-            }
-
-        } catch (error: any) {
-            console.error("Critical Error in executeDataLoad:", error);
-            showNotification(`Error crítico: ${error.message}`, 'error');
+    // Auto-navigate from processing to portal when data is ready
+    useEffect(() => {
+        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario && erpData.length > 0) {
+            navigate('/portal');
         }
-        navigate('/portal');
-    };
+        // If error, maybe stay or show error? Notification handles error.
+        // If data is empty but loaded, we still go to portal?
+        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario && erpData.length === 0 && !errorFichajes) {
+            navigate('/portal');
+        }
+    }, [loadingFichajes, loadingCalendario, erpData, errorFichajes, navigate]);
 
     const handleLogin = useCallback((user: User) => {
         setCurrentUser(user);
@@ -216,12 +198,14 @@ const MainRoutes: React.FC = () => {
 
     const handleLogout = useCallback(() => {
         setCurrentUser(null);
-        setErpData([]);
+        // Clean React Query Cache
+        queryClient.removeQueries();
+
         setAnalysisResult('');
         setLoginRole(null);
         setGlobalFilterState(null);
         navigate('/login');
-    }, [setErpData, navigate]);
+    }, [navigate, queryClient]);
 
     const authContextValue = useMemo(() => ({
         user: currentUser,
@@ -270,7 +254,11 @@ const MainRoutes: React.FC = () => {
                                     incidentLog={incidentLog}
                                     setIncidentLog={setIncidentLog}
                                     companyHolidays={companyHolidays}
-                                    setCompanyHolidays={setCompanyHolidays}
+                                    // setCompanyHolidays={setCompanyHolidays} // Derived from query, read-only mostly? Or separate state?
+                                    // If HrLayout needs to modify holidays, we might need state. 
+                                    // But holidays usually come from ERP.
+                                    // For now passing as prop. If HrLayout expects setter, we might need a local state synced with query.
+                                    setCompanyHolidays={() => { }} // Placeholder or handle updates via mutation if needed
                                     initialStartDate={globalFilterState?.startDate}
                                     initialEndDate={globalFilterState?.endDate}
                                     initialStartTime={globalFilterState?.startTime}
@@ -303,11 +291,10 @@ const MainRoutes: React.FC = () => {
 const App: React.FC = () => {
     return (
         <NotificationProvider>
-            <ErpDataProvider>
-                <BrowserRouter>
-                    <MainRoutes />
-                </BrowserRouter>
-            </ErpDataProvider>
+            {/* ErpDataProvider REMOVED */}
+            <BrowserRouter>
+                <MainRoutes />
+            </BrowserRouter>
         </NotificationProvider>
     );
 };

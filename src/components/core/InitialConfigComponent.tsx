@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { checkConnection } from '../../services/apiService';
 import { toISODateLocal } from '../../utils/localDate';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface InitialConfigComponentProps {
     onContinue: (startDate: string, endDate: string, startTime: string, endTime: string) => void;
@@ -99,10 +100,9 @@ const InitialConfigComponent: React.FC<InitialConfigComponentProps> = ({ onConti
                             {/* Inicio */}
                             <div className="space-y-2">
                                 <label className="block text-xs font-bold text-slate-500 uppercase">Desde</label>
-                                <input 
-                                    type="date" 
-                                    value={startDate} 
-                                    onChange={(e) => setStartDate(e.target.value)} 
+                                <SmartDateInput
+                                    value={startDate}
+                                    onChange={setStartDate}
                                     className="w-full border-slate-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
                                 />
                                 <input 
@@ -116,10 +116,9 @@ const InitialConfigComponent: React.FC<InitialConfigComponentProps> = ({ onConti
                             {/* Fin */}
                             <div className="space-y-2">
                                 <label className="block text-xs font-bold text-slate-500 uppercase">Hasta</label>
-                                <input 
-                                    type="date" 
-                                    value={endDate} 
-                                    onChange={(e) => setEndDate(e.target.value)} 
+                                <SmartDateInput
+                                    value={endDate}
+                                    onChange={setEndDate}
                                     className="w-full border-slate-300 rounded-md text-sm focus:ring-blue-500 focus:border-blue-500"
                                 />
                                 <input 

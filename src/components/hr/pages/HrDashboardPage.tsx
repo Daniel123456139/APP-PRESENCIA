@@ -51,7 +51,8 @@ const HrDashboardPage: React.FC = () => {
         handleUnproductivityExport,
 
         datasetAusencias,
-        effectiveCalendarDays
+        effectiveCalendarDays,
+        isLoading
     } = useHrLayout();
 
     const getFullMonthRange = (dateStr: string) => {
@@ -161,7 +162,14 @@ const HrDashboardPage: React.FC = () => {
                 />
             </div>
 
-            {selectedEmployeeIds.length === 1 && selectedEmployeeData ? (
+            {isLoading ? (
+                <div className="flex items-center justify-center h-64">
+                    <div className="flex flex-col items-center gap-4">
+                        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-slate-600 font-medium">Cargando datos del portal...</p>
+                    </div>
+                </div>
+            ) : selectedEmployeeIds.length === 1 && selectedEmployeeData ? (
                 <EmployeeDetailDashboard
                     employeeId={parseInt(selectedEmployeeIds[0], 10)}
                     employeeName={selectedEmployeeData.nombre}

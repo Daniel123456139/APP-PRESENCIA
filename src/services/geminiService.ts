@@ -1,24 +1,15 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { ProcessedDataRow, RawDataRow } from "../types";
+import { GoogleGenAI } from "@google/genai";
+import { RawDataRow } from "../types";
+import { getGeminiClientApiKey, getGeminiDisabledMessage } from '../config/aiConfig';
 
-// Safe API Key retrieval
-const getApiKey = () => {
-    try {
-        if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
-            return process.env.API_KEY;
-        }
-    } catch (e) { }
-    return '';
-};
-
-const apiKey = getApiKey();
+const apiKey = getGeminiClientApiKey();
 // Initialize only if key exists to prevent immediate crash, handle missing key inside functions
 const ai = apiKey ? new GoogleGenAI({ apiKey: apiKey }) : null;
 
 export const getGeminiAnalysis = async (filteredRawData: RawDataRow[], motivos: { IDMotivo: string; DescMotivo: string }[]): Promise<string> => {
     if (!ai) {
-        return "⚠️ API Key de Google Gemini no configurada. Por favor, revisa tu archivo .env.";
+        return `⚠️ ${getGeminiDisabledMessage()}`;
     }
 
     const motivosList = motivos.map(m => `- ID ${m.IDMotivo}: ${m.DescMotivo}`).join('\n');

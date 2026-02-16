@@ -1,5 +1,6 @@
 
 import React, { memo, useState, useMemo } from 'react';
+import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
 import { ProcessedDataRow } from '../../types';
 import { formatPeriodoAnalisis } from '../../utils/dateFormatter';
 import { ScheduleCell, JustifiedCell } from './HrDataTable';
@@ -109,6 +110,7 @@ const TableHeader: React.FC<{
 
 interface RowProps {
     row: any; // Using any for augmented row properties
+    style?: React.CSSProperties;
     onReview: (employee: ProcessedDataRow) => void;
     onManualIncident: (employee: ProcessedDataRow) => void;
     justifiedKeys: Map<string, number>;
@@ -119,7 +121,7 @@ interface RowProps {
     endDate?: string;
 }
 
-const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, startDate, endDate }: RowProps) => {
+const Row = memo(({ row, style, onReview, onManualIncident, justifiedKeys, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, startDate, endDate }: RowProps) => {
     const hasPendingIncidents = row.incidentCount > 0;
     const justifiedEntries = Array.from(justifiedKeys.entries()).filter(([k, v]) => {
         const idStr = String(row.operario);
@@ -137,7 +139,7 @@ const Row = memo(({ row, onReview, onManualIncident, justifiedKeys, isLongRange,
         : "hover:bg-slate-50/70 border-l-4 border-l-transparent";
 
     return (
-        <div className={`flex items-center border-b border-slate-200 text-sm h-[50px] ${rowClass}`}>
+        <div style={style} className={`flex items-center border-b border-slate-200 text-sm h-[50px] ${rowClass}`}>
             <div className="w-24 px-4 font-medium text-slate-900 truncate font-mono">{formatEmployeeId(row.operario)}</div>
             <div className="flex-1 px-4 truncate">{row.nombre}</div>
             <div className="w-40 px-4">
@@ -268,6 +270,48 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
         return <div className="p-8 text-center text-slate-500">No hay datos para mostrar.</div>;
     }
 
+    type RowItemData = {
+        rows: typeof sortedData;
+        onReviewGaps: (employee: ProcessedDataRow) => void;
+        onManualIncident: (employee: ProcessedDataRow) => void;
+        justifiedIncidentKeys: Map<string, number>;
+        isLongRange?: boolean;
+        setViewingShiftChanges: (data: { name: string, changes: any[] } | null) => void;
+        flexibleEmployeeIds?: Set<number>;
+        startDate?: string;
+        endDate?: string;
+    };
+
+    const rowItemData: RowItemData = {
+        rows: sortedData,
+        onReviewGaps,
+        onManualIncident,
+        justifiedIncidentKeys,
+        isLongRange,
+        setViewingShiftChanges,
+        flexibleEmployeeIds,
+        startDate,
+        endDate
+    };
+
+    const VirtualRow = ({ index, style, data: itemData }: ListChildComponentProps<RowItemData>) => {
+        const row = itemData.rows[index];
+        return (
+            <Row
+                row={row}
+                style={style}
+                onReview={itemData.onReviewGaps}
+                onManualIncident={itemData.onManualIncident}
+                justifiedKeys={itemData.justifiedIncidentKeys}
+                isLongRange={itemData.isLongRange}
+                setViewingShiftChanges={itemData.setViewingShiftChanges}
+                flexibleEmployeeIds={itemData.flexibleEmployeeIds}
+                startDate={itemData.startDate}
+                endDate={itemData.endDate}
+            />
+        );
+    };
+
     return (
         <div className="bg-white/90 rounded-2xl shadow-lg border border-slate-200/70 overflow-hidden">
             <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center bg-gradient-to-r from-indigo-50 via-sky-50 to-slate-50 gap-3">
@@ -314,21 +358,17 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                 <TableHeader colKey="incidentCount" label="ESTADO" width="w-64" sortConfig={sortConfig} onSort={handleSort} />
             </div>
 
-            <div className="overflow-y-auto" style={{ height: 600 }}>
-                {sortedData.map((row) => (
-                    <Row
-                        key={row.operario}
-                        row={row}
-                        onReview={onReviewGaps}
-                        onManualIncident={onManualIncident}
-                        justifiedKeys={justifiedIncidentKeys}
-                        isLongRange={isLongRange}
-                        setViewingShiftChanges={setViewingShiftChanges}
-                        flexibleEmployeeIds={flexibleEmployeeIds}
-                        startDate={startDate}
-                        endDate={endDate}
-                    />
-                ))}
+            <div className="overflow-hidden" style={{ height: 600 }}>
+                <List
+                    height={600}
+                    width={'100%'}
+                    itemCount={sortedData.length}
+                    itemSize={50}
+                    itemData={rowItemData}
+                    itemKey={(index, data) => String(data.rows[index]?.operario ?? index)}
+                >
+                    {VirtualRow}
+                </List>
             </div>
             {/* Modal de Detalles de Cambios de Turno */}
             {viewingShiftChanges && (

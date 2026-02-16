@@ -4,6 +4,7 @@ import { SickLeave } from '../../types';
 import { toISODateLocal } from '../../utils/localDate';
 import EmployeeSelect from '../shared/EmployeeSelect';
 import { Operario } from '../../services/erpApi';
+import SmartDateInput from '../shared/SmartDateInput';
 
 interface SickLeaveModalProps {
     isOpen: boolean;
@@ -123,11 +124,11 @@ const SickLeaveModal: React.FC<SickLeaveModalProps> = ({ isOpen, onClose, onSave
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="startDate" className="block text-sm font-medium text-slate-700">Fecha de Inicio</label>
-                            <input type="date" id="startDate" value={startDate} onChange={e => setStartDate(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                            <SmartDateInput id="startDate" value={startDate} onChange={setStartDate} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
                         </div>
                         <div>
                             <label htmlFor="endDate" className="block text-sm font-medium text-slate-700">Fecha de Fin (Opcional)</label>
-                            <input type="date" id="endDate" value={endDate} onChange={e => setEndDate(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                            <SmartDateInput id="endDate" value={endDate} onChange={setEndDate} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
                         </div>
                     </div>
 
@@ -156,7 +157,7 @@ const SickLeaveModal: React.FC<SickLeaveModalProps> = ({ isOpen, onClose, onSave
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="fechaRevision" className="block text-sm font-medium text-slate-700">Próx. Revisión (Opcional)</label>
-                            <input type="date" id="fechaRevision" value={fechaRevision} onChange={e => setFechaRevision(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                            <SmartDateInput id="fechaRevision" value={fechaRevision} onChange={setFechaRevision} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
                         </div>
                         <div>
                             <label htmlFor="bcc" className="block text-sm font-medium text-slate-700">Base Cotización (€)</label>

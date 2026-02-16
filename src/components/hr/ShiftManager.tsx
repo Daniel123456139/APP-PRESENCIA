@@ -4,6 +4,7 @@ import { Shift, ShiftCode, SHIFT_TYPES, MANAGEABLE_SHIFT_TYPES, User, RawDataRow
 import { DEPARTMENTS } from '../../constants';
 import AdvancedEmployeeFilter from '../shared/AdvancedEmployeeFilter';
 import ConfirmationModal from '../shared/ConfirmationModal';
+import SmartDateInput from '../shared/SmartDateInput';
 import { SvgIcon } from '../shared/Nav';
 import { toISODateLocal } from '../../utils/localDate';
 
@@ -318,11 +319,11 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="start-date" className="block text-sm font-medium text-slate-700">Fecha Inicio</label>
-                            <input type="date" id="start-date" value={startDate} onChange={e => setStartDate(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm" />
+                            <SmartDateInput id="start-date" value={startDate} onChange={setStartDate} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm" />
                         </div>
                         <div>
                             <label htmlFor="end-date" className="block text-sm font-medium text-slate-700">Fecha Fin</label>
-                            <input type="date" id="end-date" value={endDate} onChange={e => setEndDate(e.target.value)} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm" />
+                            <SmartDateInput id="end-date" value={endDate} onChange={setEndDate} className="mt-1 block w-full py-2 px-3 border border-slate-300 rounded-md shadow-sm" />
                         </div>
                         <div>
                             <label htmlFor="department-filter" className="block text-sm font-medium text-slate-700">Sección</label>
