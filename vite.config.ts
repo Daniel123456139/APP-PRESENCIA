@@ -13,6 +13,13 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      proxy: {
+        '/api/erp': {
+          target: 'http://10.0.0.19:8000',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/erp/, ''),
+        },
+      },
     },
     plugins: [react()],
     resolve: {

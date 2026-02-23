@@ -40,6 +40,13 @@ tsc_output*.txt
 
 # Secretos y Entorno
 .env
+scripts/serviceAccount.json
+scripts/*serviceAccount*.json
+scripts/*usuarios-*.json
+
+# Backups locales de Firestore
+scripts/backups/
+docs/firebase-auditorias/
 
 # Documentación sensible
 docs/*.xlsx
@@ -55,3 +62,6 @@ unpacked_*/
 PRESENCIA_JUSTIFICACION_ID.md
 PRESENCIA_TECHNICAL_REPORT.md
 PRESENCIA_USER_MANUAL.md
+
+# Firebase cache
+.firebase/
