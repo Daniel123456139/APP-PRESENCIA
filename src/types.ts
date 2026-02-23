@@ -3,16 +3,19 @@ export enum Role {
     Employee = 'Operario',
     Management = 'Dirección',
     HR = 'RRHH',
+    OPERADOR = 'Operador',
+    GESTOR_TRABAJOS = 'Gestor de Trabajos'
 }
 
 export interface User {
-    id: number;
+    id: string | number;
     name: string;
     role: Role;
     department?: string;
     uid?: string;
     email?: string;
-    appRole?: 'HR' | 'EMPLOYEE' | 'MANAGEMENT';
+    appRole?: 'HR' | 'EMPLOYEE' | 'MANAGEMENT' | 'OPERADOR' | 'GESTOR_TRABAJOS' | 'SUPER_ADMIN';
+    rolUnificado?: string;
     flexible?: boolean;
 }
 
@@ -63,6 +66,7 @@ export interface UnjustifiedGap {
     start: string; // HH:MM:SS
     end: string;   // HH:MM:SS
     originPunchId?: number; // Check IDControlPresencia type in RawDataRow
+    startFromBoundary?: boolean; // true when start is not a real punch-out
 }
 
 export interface WorkdayDeviation {
