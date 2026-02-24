@@ -1,6 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getMotivosAusencias, getCalendarioEmpresa, getOperarios, MotivoAusencia, CalendarioDia, Operario } from '../services/erpApi';
+import { useQuery } from '@tanstack/react-query';
+import { getMotivosAusencias, getCalendarioEmpresa, getOperarios, Operario } from '../services/erpApi';
 import { useMemo } from 'react';
+import { collection, getDocs } from 'firebase/firestore';
+import { getFirebaseDb } from '../firebaseConfig';
+import { resolveEmployeeCollection } from '../services/firebaseSchemaService';
 
 // --- Keys ---
 export const ERP_KEYS = {
@@ -19,7 +22,8 @@ export const useMotivos = () => {
     });
 
     return {
-        motivos: data || [],
+        // Filtramos ID 5 (Vacaciones) según instrucciones del usuario
+        motivos: (data || []).filter(m => parseInt(m.IDMotivo) !== 5),
         loading: isLoading,
         error: error ? (error as Error).message : null,
         refresh: refetch
@@ -29,22 +33,50 @@ export const useMotivos = () => {
 export const useOperarios = (onlyActive = true) => {
     const { data, isLoading, error, refetch } = useQuery({
         queryKey: ERP_KEYS.operarios,
-        queryFn: () => getOperarios(),
+        queryFn: async () => {
+            try {
+                return await getOperarios();
+            } catch (erpError) {
+                const db = getFirebaseDb();
+                const employeesCollectionName = await resolveEmployeeCollection(db);
+                const snapshot = await getDocs(collection(db, employeesCollectionName));
+
+                const fromFirestore = snapshot.docs
+                    .map((doc) => {
+                        const data = doc.data();
+                        const idRaw = data.IDOperario ?? doc.id;
+                        const idNum = parseInt(String(idRaw), 10);
+
+                        if (Number.isNaN(idNum)) return null;
+
+                        const activeValue = data.Activo ?? data.activo ?? true;
+                        const activo = activeValue === true || activeValue === 1 || activeValue === '1' || activeValue === 'true';
+
+                        return {
+                            IDOperario: idNum,
+                            DescOperario: data.DescOperario || data.nombre || `Empleado ${idNum}`,
+                            IDDepartamento: parseInt(String(data.IDDepartamento ?? 0), 10) || 0,
+                            DescDepartamento: data.DescDepartamento || data.Seccion || '',
+                            Activo: activo,
+                            Productivo: data.Productivo ?? true,
+                            Flexible: data.Flexible ?? false,
+                        } as Operario;
+                    })
+                    .filter((op): op is Operario => !!op);
+
+                console.warn('ERP no disponible, usando fallback Firestore:', erpError);
+                return fromFirestore;
+            }
+        },
         staleTime: 1000 * 60 * 5, // 5 minutos
     });
 
     const filteredOperarios = useMemo(() => {
         if (!data) return [];
         return data.filter(op => {
-            // Excluir ID 999
             if (op.IDOperario === 999) return false;
-
-            // Excluir empleados con "zzz" en descripción (dormidos/inactivos)
             if (op.DescOperario?.toLowerCase().includes('zzz')) return false;
-
-            // Si onlyActive está activado, también filtrar por campo Activo
             if (onlyActive && !op.Activo) return false;
-
             return true;
         });
     }, [data, onlyActive]);
@@ -61,7 +93,7 @@ export const useCalendario = (startDate: string, endDate: string) => {
     const { data, isLoading, error, refetch } = useQuery({
         queryKey: ERP_KEYS.calendario(startDate, endDate),
         queryFn: () => getCalendarioEmpresa(startDate, endDate),
-        enabled: !!startDate && !!endDate, // Solo ejecutar si hay fechas
+        enabled: !!startDate && !!endDate,
         staleTime: 1000 * 60 * 10, // 10 minutos
     });
 

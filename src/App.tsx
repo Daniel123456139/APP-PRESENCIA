@@ -7,11 +7,9 @@ import HrDashboardPage from './components/hr/pages/HrDashboardPage';
 import {
     HrCalendarPage,
     HrVacationsPage,
-    HrHistoryPage,
     HrProfilesPage,
     HrBlogPage,
-    HrSettingsPage,
-    HrJobsPage
+    HrSettingsPage
 } from './components/hr/pages/HrPages';
 
 import ProcessingComponent from './components/core/ProcessingComponent';
@@ -20,18 +18,15 @@ import InitialConfigComponent from './components/core/InitialConfigComponent';
 import { User, Role, RawDataRow, BlogPost, Shift, SickLeave, IncidentLogEntry, CompanyHoliday, FutureAbsence } from './types';
 import { MOCK_BLOG_POSTS } from './data/mockBlog';
 import { NotificationProvider, useNotification } from './components/shared/NotificationContext';
-// import { ErpDataProvider, useErpDataActions, useErpDataState } from './store/erpDataStore'; // DEPRECATED
 import { useFichajes } from './hooks/useFichajes';
 import { useCalendario } from './hooks/useErp';
 import RealtimeNotificationsBridge from './components/shared/RealtimeNotificationsBridge';
 import GlobalStatusPanel from './components/shared/GlobalStatusPanel';
 import { AuditBridge } from './services/AuditBridge';
 import { SickLeaveMetadataService } from './services/sickLeaveMetadataService';
-// import { fetchFichajes } from './services/apiService'; // Handled by hook
-// import { getCalendarioEmpresa, CalendarioDia } from './services/erpApi'; // Handled by hook
 import { SyncService } from './services/syncService';
 import { encryptStorageData, decryptStorageData } from './services/encryptionService';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { signOutApp, subscribeToAuthChanges } from './services/firebaseAuthService';
 import { getFirebaseApp } from './firebaseConfig';
 
 export interface AuthContextType {
@@ -54,8 +49,26 @@ const MainRoutes: React.FC = () => {
     const queryClient = useQueryClient();
     const [loginRole, setLoginRole] = useState<'HR' | null>(null);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [authLoading, setAuthLoading] = useState(true);
 
-    // Global Filter State
+    // 1. Suscribirse a cambios de autenticación
+    useEffect(() => {
+        const unsubscribe = subscribeToAuthChanges((authUser) => {
+            if (authUser) {
+                setCurrentUser({
+                    id: authUser.uid,
+                    name: authUser.displayName,
+                    role: authUser.appRole as any,
+                    rolUnificado: authUser.rolUnificado
+                });
+            } else {
+                setCurrentUser(null);
+            }
+            setAuthLoading(false);
+        });
+        return () => unsubscribe();
+    }, []);
+
     const [globalFilterState, setGlobalFilterState] = useState<{
         startDate: string;
         endDate: string;
@@ -115,6 +128,10 @@ const MainRoutes: React.FC = () => {
     }, [errorFichajes, errorCalendario, showNotification]);
 
     useEffect(() => {
+        if (!currentUser) {
+            return;
+        }
+
         AuditBridge.init();
         SickLeaveMetadataService.init();
         const handleOnline = async () => {
@@ -132,75 +149,29 @@ const MainRoutes: React.FC = () => {
             window.removeEventListener('online', handleOnline);
             window.removeEventListener('offline', handleOffline);
         };
-    }, [showNotification, queryClient]);
-
-    // Firebase Auth
-    useEffect(() => {
-        let cancelled = false;
-        const initFirebaseAuth = async () => {
-            try {
-                const app = getFirebaseApp();
-                const auth = getAuth(app);
-                if (!auth.currentUser) {
-                    await signInAnonymously(auth);
-                }
-            } catch (error: any) {
-                if (cancelled) return;
-                console.error('Firebase anonymous auth failed:', error);
-                if (error.code === 'auth/admin-restricted-operation') {
-                    showNotification('Error: Autenticación Anónima deshabilitada en Firebase Console.', 'error');
-                } else {
-                    showNotification('No se pudo autenticar en Firebase.', 'error');
-                }
-            }
-        };
-
-        initFirebaseAuth();
-        return () => {
-            cancelled = true;
-        };
-    }, [showNotification]);
-
-    const handleRoleSelect = async (role: 'HR' | 'EMPLOYEE') => {
-        if (role === 'HR') {
-            setLoginRole('HR');
-            const hrUser: User = {
-                id: 1,
-                name: 'Administrador RRHH',
-                role: Role.HR
-            };
-            setCurrentUser(hrUser);
-            navigate('/setup');
-        }
-    };
+    }, [currentUser, showNotification, queryClient]);
 
     const handleInitialConfigContinue = async (startDate: string, endDate: string, startTime: string, endTime: string) => {
         setGlobalFilterState({ startDate, endDate, startTime, endTime });
         navigate('/processing');
-        // Data loading is triggered automatically by hooks when state changes
     };
 
     // Auto-navigate from processing to portal when data is ready
     useEffect(() => {
-        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario && erpData.length > 0) {
+        const isProcessing = location.pathname === '/processing';
+        if (isProcessing && !loadingFichajes && !loadingCalendario) {
             navigate('/portal');
         }
-        // If error, maybe stay or show error? Notification handles error.
-        // If data is empty but loaded, we still go to portal?
-        if (location.pathname === '/processing' && !loadingFichajes && !loadingCalendario && erpData.length === 0 && !errorFichajes) {
-            navigate('/portal');
-        }
-    }, [loadingFichajes, loadingCalendario, erpData, errorFichajes, navigate]);
+    }, [loadingFichajes, loadingCalendario, erpData, navigate, location.pathname]);
 
     const handleLogin = useCallback((user: User) => {
         setCurrentUser(user);
     }, []);
 
-    const handleLogout = useCallback(() => {
+    const handleLogout = useCallback(async () => {
+        await signOutApp();
         setCurrentUser(null);
-        // Clean React Query Cache
         queryClient.removeQueries();
-
         setAnalysisResult('');
         setLoginRole(null);
         setGlobalFilterState(null);
@@ -218,6 +189,10 @@ const MainRoutes: React.FC = () => {
         shifts,
     }), [erpData, shifts]);
 
+    if (authLoading) {
+        return <ProcessingComponent />;
+    }
+
     return (
         <AuthContext.Provider value={authContextValue}>
             <DataContext.Provider value={dataContextValue}>
@@ -226,7 +201,7 @@ const MainRoutes: React.FC = () => {
                 <Routes>
                     <Route
                         path="/login"
-                        element={!currentUser ? <LoginComponent onRoleSelect={handleRoleSelect} /> : <Navigate to="/portal" />}
+                        element={!currentUser ? <LoginComponent /> : <Navigate to="/portal" />}
                     />
                     <Route
                         path="/setup"
@@ -254,11 +229,7 @@ const MainRoutes: React.FC = () => {
                                     incidentLog={incidentLog}
                                     setIncidentLog={setIncidentLog}
                                     companyHolidays={companyHolidays}
-                                    // setCompanyHolidays={setCompanyHolidays} // Derived from query, read-only mostly? Or separate state?
-                                    // If HrLayout needs to modify holidays, we might need state. 
-                                    // But holidays usually come from ERP.
-                                    // For now passing as prop. If HrLayout expects setter, we might need a local state synced with query.
-                                    setCompanyHolidays={() => { }} // Placeholder or handle updates via mutation if needed
+                                    setCompanyHolidays={() => { }}
                                     initialStartDate={globalFilterState?.startDate}
                                     initialEndDate={globalFilterState?.endDate}
                                     initialStartTime={globalFilterState?.startTime}
@@ -271,10 +242,6 @@ const MainRoutes: React.FC = () => {
                     >
                         <Route index element={<Navigate to="dashboard" replace />} />
                         <Route path="dashboard" element={<HrDashboardPage />} />
-                        <Route path="jobs" element={<HrJobsPage />} />
-                        <Route path="history" element={<HrHistoryPage />} />
-
-
                         <Route path="vacations" element={<HrVacationsPage />} />
                         <Route path="calendar" element={<HrCalendarPage />} />
                         <Route path="profiles" element={<HrProfilesPage />} />
@@ -291,7 +258,6 @@ const MainRoutes: React.FC = () => {
 const App: React.FC = () => {
     return (
         <NotificationProvider>
-            {/* ErpDataProvider REMOVED */}
             <BrowserRouter>
                 <MainRoutes />
             </BrowserRouter>

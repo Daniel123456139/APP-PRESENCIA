@@ -19,6 +19,7 @@ interface RecordIncidentModalProps {
         employee: ProcessedDataRow
     ) => Promise<void>;
     justifiedKeys?: Map<string, number>;
+    registerScope?: 'single' | 'allAbsentDays';
 }
 interface IncidentToJustify {
     type: 'gap' | 'workday' | 'absentDay';
@@ -27,7 +28,14 @@ interface IncidentToJustify {
     data: UnjustifiedGap | WorkdayDeviation | { date: string };
 }
 
-const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClose, employeeData, onJustify, justifiedKeys }) => {
+const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({
+    isOpen,
+    onClose,
+    employeeData,
+    onJustify,
+    justifiedKeys,
+    registerScope = 'single'
+}) => {
     const { erpData } = useContext(DataContext);
     const [selectedIncidentKey, setSelectedIncidentKey] = useState<string>('');
     const [motivoId, setMotivoId] = useState<string>('');
@@ -95,7 +103,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                 // User requirement: "si se va a las 8:30, incidencia de 8:31 a 10" -> Apply +1
                 // Late Arrival: "15:00 -> 16:00" -> DO NOT Apply +1 (Must start at 15:00)
                 let adjustedStart = gap.start;
-                if (gap.start !== shiftBounds.start) {
+                if (gap.start !== shiftBounds.start && !gap.startFromBoundary) {
                     adjustedStart = addOneMinute(gap.start);
                 }
 
@@ -113,7 +121,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                             <span className="text-slate-500 text-xs text-nowrap ml-2">Tramo: {shiftBounds.start}-{shiftBounds.end}</span>
                         </span>
                     ),
-                    data: { ...gap, start: adjustedStart }, // Pass adjusted Start
+                    data: gap,
                 };
             })
             .filter((item): item is IncidentToJustify => item !== null);
@@ -192,6 +200,17 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
         return combined;
     }, [employeeData, justifiedKeys]);
 
+    const absentDaysToProcess = useMemo(() => {
+        if (!employeeData?.absentDays) return [] as string[];
+        return Array.from(new Set(employeeData.absentDays)).sort();
+    }, [employeeData]);
+
+    const scopeShiftBounds = useMemo(() => {
+        if (!employeeData) return { start: '07:00', end: '15:00' };
+        const shiftCode = employeeData.turnoAsignado || 'M';
+        return getShiftBounds(shiftCode);
+    }, [employeeData]);
+
     const selectedIncident = useMemo(() => {
         return incidents.find(inc => inc.key === selectedIncidentKey);
     }, [selectedIncidentKey, incidents]);
@@ -208,9 +227,11 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
 
     useEffect(() => {
         // Reset only when opening
-        if (isOpen && !prevIsOpenRef.current) {
+                        if (isOpen && !prevIsOpenRef.current) {
             if (incidents.length > 0) {
                 setSelectedIncidentKey(incidents[0].key);
+            } else if (registerScope === 'allAbsentDays') {
+                setSelectedIncidentKey('__absence_scope__');
             }
             setMotivoId('');
             setError('');
@@ -224,10 +245,12 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                 setSelectedIncidentKey(incidents[0].key);
                 setMotivoId(''); // Reset reason if we auto-switched incident
             }
+        } else if (isOpen && prevIsOpenRef.current && registerScope === 'allAbsentDays' && incidents.length === 0 && selectedIncidentKey !== '__absence_scope__') {
+            setSelectedIncidentKey('__absence_scope__');
         }
 
         prevIsOpenRef.current = isOpen;
-    }, [isOpen, incidents, selectedIncidentKey]);
+    }, [isOpen, incidents, selectedIncidentKey, registerScope]);
 
     useEffect(() => {
         // Clear motivo only if the USER manually switched incidents, handled by setting it in the onChange handler, not here.
@@ -240,13 +263,40 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
     if (!isOpen || !employeeData) return null;
 
     const handleSubmit = async () => {
-        if (!motivoId || !selectedIncident) {
-            setError('Debes seleccionar una incidencia y un motivo.');
+        if (!motivoId) {
+            setError('Debes seleccionar un motivo.');
             return;
         }
+
+        if (!selectedIncident && !(registerScope === 'allAbsentDays' && absentDaysToProcess.length > 0 && !isManualMode)) {
+            setError('Debes seleccionar una incidencia.');
+            return;
+        }
+
         // reason id is number
         const reason = availableReasons.find(r => r.id === parseInt(motivoId));
         if (!reason) return;
+
+        if (registerScope === 'allAbsentDays' && !isManualMode) {
+            if (absentDaysToProcess.length === 0) {
+                setError('No hay dias ausentes para justificar en este empleado.');
+                return;
+            }
+
+            setError('');
+            setIsSaving(true);
+            try {
+                for (const date of absentDaysToProcess) {
+                    await onJustify({ type: 'absentDay', data: { date } }, reason, employeeData);
+                }
+                onClose();
+            } catch (err: any) {
+                setError(err?.message || 'Error al guardar en el servidor. Intentalo de nuevo.');
+            } finally {
+                setIsSaving(false);
+            }
+            return;
+        }
 
         // Usar la estrategia centralizada para generar las filas exactas
         let strategyResult;
@@ -309,8 +359,6 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
             setIsValidationModalOpen(true);
             return;
         }
-
-        const isFullDayAbsence = selectedIncident.type === 'absentDay';
 
         // console.group('📝 [SUBMIT] Incidencia a registrar');
         // console.log('👤 Empleado:', employeeData.nombre);
@@ -415,7 +463,25 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                         ) : (
                             <div>
                                 <label className="block text-sm font-medium text-slate-700">1. Selecciona la incidencia a justificar</label>
-                                {incidents.length > 0 ? (
+                                {registerScope === 'allAbsentDays' && absentDaysToProcess.length > 0 ? (
+                                    <div className="mt-2 border rounded-md p-2 bg-slate-50">
+                                        <label className="flex items-center p-2 rounded-md bg-white border border-slate-100">
+                                            <input
+                                                type="radio"
+                                                name="incident"
+                                                value="__absence_scope__"
+                                                checked={selectedIncidentKey === '__absence_scope__'}
+                                                onChange={(e) => setSelectedIncidentKey(e.target.value)}
+                                                disabled={isSaving}
+                                                className="h-4 w-4 text-blue-600 border-slate-300 focus:ring-blue-500"
+                                            />
+                                            <span className="ml-3 text-sm text-slate-700">
+                                                Grabar incidencia de dia completo: <strong className="font-bold text-red-600 bg-red-50 px-1 rounded mx-1">{scopeShiftBounds.start} - {scopeShiftBounds.end}</strong>
+                                                <span className="text-slate-500 text-xs text-nowrap ml-2">{absentDaysToProcess.length} dia(s)</span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                ) : incidents.length > 0 ? (
                                     <div className="mt-2 space-y-2 max-h-40 overflow-y-auto border rounded-md p-2 bg-slate-50">
                                         {incidents.map(inc => (
                                             <label key={inc.key} className="flex items-center p-2 rounded-md bg-white hover:bg-blue-50 cursor-pointer border border-slate-100">
@@ -475,7 +541,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                         </div>
                     </div>
 
-                    {selectedIncident && (
+                    {(selectedIncident || (registerScope === 'allAbsentDays' && absentDaysToProcess.length > 0 && !isManualMode)) && (
                         <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
                             <h4 className="text-sm font-semibold text-blue-800 mb-1 flex items-center">
                                 <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -485,6 +551,16 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                             </h4>
                             <p className="text-sm text-blue-700">
                                 {(() => {
+                                    if (registerScope === 'allAbsentDays' && absentDaysToProcess.length > 0 && !isManualMode) {
+                                        return (
+                                            <>
+                                                Se grabara incidencia completa para <strong className="font-bold">{absentDaysToProcess.length} dia(s)</strong>.
+                                                <br />
+                                                <span className="text-xs opacity-75">Tramo por turno: {scopeShiftBounds.start} - {scopeShiftBounds.end}</span>
+                                            </>
+                                        );
+                                    }
+
                                     // Calculate preview using actual strategy logic
                                     try {
                                         const dummyReason = { id: 99, desc: 'Preview' }; // Dummy reason for time calc
@@ -552,7 +628,7 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({ isOpen, onClo
                         <button
                             type="button"
                             onClick={handleSubmit}
-                            disabled={!motivoId || (!isManualMode && incidents.length === 0) || isSaving}
+                            disabled={!motivoId || (!isManualMode && incidents.length === 0 && !(registerScope === 'allAbsentDays' && absentDaysToProcess.length > 0)) || isSaving}
                             className="px-5 py-2 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed flex items-center min-w-[120px] justify-center"
                         >
                             {isSaving ? (

@@ -13,6 +13,7 @@ import { getOperarios, Operario } from './erpApi';
 import { getFirebaseDb } from '../firebaseConfig';
 import { doc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import logger from '../utils/logger';
+import { getEmployeeDocWithFallback } from './firebaseSchemaService';
 
 // ═══════════════════════════════════════════════════════════════════
 // TIPOS DE DATOS
@@ -46,6 +47,7 @@ export interface EmployeeRichData {
     Edad?: number; // Desde Firestore
     NivelEstudios?: string; // Desde Firestore
     FechaNacimiento?: string; // YYYY-MM-DD
+    DiasVacaciones?: number; // Desde Firestore
     updatedAt?: any; // Firestore Timestamp
     updatedBy?: string; // Sistema que actualizó
 }
@@ -127,15 +129,14 @@ export async function getEmployeeRichData(employeeId: string): Promise<EmployeeR
         // Normalizar ID a formato consistente (3 dígitos con ceros a la izquierda)
         const normalizedId = employeeId.toString().padStart(3, '0');
 
-        const docRef = doc(db, 'EMPLEADOS', normalizedId);
-        const docSnap = await getDoc(docRef);
+        const resolvedDoc = await getEmployeeDocWithFallback(db, normalizedId);
 
-        if (!docSnap.exists()) {
+        if (!resolvedDoc?.snapshot.exists()) {
             logger.info(`ℹ️ Empleado ${normalizedId} no encontrado en Firebase - Datos pendientes de Talento`);
             return null;
         }
 
-        const data = docSnap.data() as EmployeeRichData;
+        const data = resolvedDoc.snapshot.data() as EmployeeRichData;
 
         // Validación: Asegurar que NO hay PII en Firestore
         if ('DescOperario' in data || 'nombre' in data || 'apellidos' in data) {

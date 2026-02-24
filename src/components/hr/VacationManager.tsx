@@ -70,10 +70,10 @@ const VacationManager: React.FC = () => {
         return departmentFilteredEmployees.filter(emp => idSet.has(emp.id));
     }, [departmentFilteredEmployees, selectedEmployeeIds]);
 
-    // Get Vacation Ranges (Code 5 and 8)
+    // Get Vacation Ranges (Code 8 - Vacaciones Año Anterior)
     const vacationRanges = useMemo(() => {
         const allLeaves = groupRawDataToLeaves(erpData);
-        return allLeaves.filter(l => l.motivoId === 5 || l.motivoId === 8);
+        return allLeaves.filter(l => l.motivoId === 8);
     }, [erpData]);
 
     const holidays = useMemo(() => {
@@ -121,7 +121,7 @@ const VacationManager: React.FC = () => {
         const empCalendarMap = employeeCalendarsByDate.get(employeeId);
         if (empCalendarMap) {
             const dayInfo = empCalendarMap.get(dateStr);
-            if (dayInfo && dayInfo.TipoDia === "2") {
+            if (dayInfo && String(dayInfo.TipoDia) === '2') {
                 return { type: 'vacation', source: 'calendar' };
             }
         }

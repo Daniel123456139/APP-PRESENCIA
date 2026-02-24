@@ -1,4 +1,6 @@
 
+export const API_BASE_URL = '/api/erp';
+
 export const ANNUAL_CREDITS = {
     MEDICO_HOURS: 16,
     VACATION_DAYS: 22, // As per spec, 22 Days

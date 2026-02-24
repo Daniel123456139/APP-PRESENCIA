@@ -1,10 +1,14 @@
 
+import { API_BASE_URL } from '../constants';
+
 export const getApiBaseUrl = (): string => {
     const isProd = typeof import.meta !== 'undefined' && !!import.meta.env && import.meta.env.PROD;
+    const defaultProxyUrl = API_BASE_URL;
     const enforceProtocol = (url: string): string => {
         if (!url) return url;
         let clean = url.trim();
         if (clean.endsWith('/')) clean = clean.slice(0, -1);
+        if (clean.startsWith('/')) return clean;
         if (isProd && clean.startsWith('http://')) {
             clean = `https://${clean.slice('http://'.length)}`;
         }
@@ -14,7 +18,12 @@ export const getApiBaseUrl = (): string => {
     // 1. Local Storage (Configuración manual tiene prioridad alta)
     try {
         const stored = localStorage.getItem('apiBaseUrl');
-        if (stored) return enforceProtocol(stored);
+        if (stored && !isProd) {
+            const normalizedStored = stored.trim().replace(/\/$/, '');
+            const isLegacyDirectErp = /10\.0\.0\.19:8000(?:\/api)?$/i.test(normalizedStored);
+            if (isLegacyDirectErp) return defaultProxyUrl;
+            return enforceProtocol(stored);
+        }
     } catch (e) {
         // Ignorar errores de acceso a localStorage
     }
@@ -23,14 +32,14 @@ export const getApiBaseUrl = (): string => {
     // @ts-ignore
     if (typeof import.meta !== 'undefined' && import.meta.env) {
         // @ts-ignore
-        const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL;
+        const envUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || defaultProxyUrl;
         if (envUrl) {
             return enforceProtocol(envUrl);
         }
     }
 
     // 3. Fallback por defecto
-    return isProd ? 'https://10.0.0.19:8000' : 'http://10.0.0.19:8000';
+    return defaultProxyUrl;
 };
 
 export const setApiBaseUrl = (url: string) => {

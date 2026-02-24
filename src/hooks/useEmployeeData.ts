@@ -18,6 +18,7 @@ import {
 } from 'firebase/firestore';
 import { getFirebaseDb } from '../firebaseConfig';
 import { EmployeeFullProfile, CompetenciaEvaluacion, NotaEmpleado, getEmployeeIdentities, EmployeeIdentity } from '../services/employeeService';
+import { resolveEmployeeCollection } from '../services/firebaseSchemaService';
 import logger from '../utils/logger';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -161,91 +162,99 @@ export const useEmployeeData = (options: UseEmployeeDataOptions = {}): UseEmploy
         setError(null);
 
         let unsubscribe: Unsubscribe | null = null;
+        let cancelled = false;
 
-        try {
-            const db = getFirebaseDb();
-            const empleadosRef = collection(db, 'EMPLEADOS');
+        const setupSubscription = async () => {
+            try {
+                const db = getFirebaseDb();
+                const employeesCollectionName = await resolveEmployeeCollection(db);
+                if (cancelled) return;
 
-            let q = query(empleadosRef);
+                const empleadosRef = collection(db, employeesCollectionName);
 
-            // Nota: Filtramos por ID si es necesario, pero el filtro de Activo 
-            // lo hacemos en memoria o confiamos en el query de Firebase.
-            if (employeeId) {
-                const normalizedId = employeeId.toString().padStart(3, '0');
-                q = query(empleadosRef, where('IDOperario', '==', normalizedId));
-            }
+                let q = query(empleadosRef);
 
-            unsubscribe = onSnapshot(
-                q,
-                async (snapshot) => {
-                    const employeesData: EmployeeFullProfile[] = [];
-
-                    for (const doc of snapshot.docs) {
-                        const docId = doc.id;
-                        const data = doc.data();
-
-                        // Determinar ID numérico
-                        const idNum = parseInt(data.IDOperario || docId, 10);
-
-                        // Buscar identidad real en API Cache
-                        const apiIdentity = apiIdentitiesRef.current.get(idNum);
-
-                        // Construir perfil preferendo datos API para PII
-                        const profile: EmployeeFullProfile = {
-                            IDOperario: idNum,
-                            DescOperario: apiIdentity?.DescOperario || data.DescOperario || `Empleado ${docId}`,
-                            Activo: data.Activo ?? true,
-                            Productivo: apiIdentity?.Productivo ?? data.Productivo ?? true,
-                            Flexible: data.Flexible ?? false,
-                            IDDepartamento: apiIdentity ? apiIdentity.IDDepartamento : parseInt(data.IDDepartamento || '0', 10),
-                            DescDepartamento: apiIdentity?.DescDepartamento || data.DescDepartamento || data.Seccion || '',
-
-                            // Datos enriquecidos (Firebase es source of truth)
-                            FechaAntiguedad: data.FechaAntiguedad,
-                            NivelRetributivo: data.NivelRetributivo,
-                            Categoria: data.Categoria,
-                            Seccion: data.Seccion,
-                            TurnoHabitual: data.TurnoHabitual,
-                            UltimoFichaje: data.UltimoFichaje,
-                            Edad: data.Edad,
-                            NivelEstudios: data.NivelEstudios,
-                            FechaNacimiento: data.FechaNacimiento,
-                            updatedAt: data.updatedAt,
-                            updatedBy: data.updatedBy,
-                            hasPendingData: false
-                        };
-
-                        // Cargar subcolecciones
-                        if (includeCompetencias) {
-                            profile.competencias = await loadCompetencias(docId);
-                        }
-                        if (includeNotas) {
-                            profile.notas = await loadNotas(docId);
-                        }
-
-                        // Filtrado final activo (si la API dice inactivo y Firebase activo, o viceversa)
-                        // Respetamos lo solicitado en options.onlyActive
-                        if (onlyActive && !profile.Activo) continue;
-
-                        employeesData.push(profile);
-                    }
-
-                    setEmployees(employeesData);
-                    setLoading(false);
-                },
-                (err) => {
-                    logger.error('❌ Error suscripción:', err);
-                    setError('Error conectando a datos en vivo');
-                    setLoading(false);
+                // Nota: Filtramos por ID si es necesario, pero el filtro de Activo
+                // lo hacemos en memoria o confiamos en el query de Firebase.
+                if (employeeId) {
+                    const normalizedId = employeeId.toString().padStart(3, '0');
+                    q = query(empleadosRef, where('IDOperario', '==', normalizedId));
                 }
-            );
 
-        } catch (err) {
-            setError('Error de conexión');
-            setLoading(false);
-        }
+                unsubscribe = onSnapshot(
+                    q,
+                    async (snapshot) => {
+                        const employeesData: EmployeeFullProfile[] = [];
+
+                        for (const doc of snapshot.docs) {
+                            const docId = doc.id;
+                            const data = doc.data();
+
+                            // Determinar ID numérico
+                            const idNum = parseInt(data.IDOperario || docId, 10);
+
+                            // Buscar identidad real en API Cache
+                            const apiIdentity = apiIdentitiesRef.current.get(idNum);
+
+                            // Construir perfil preferendo datos API para PII
+                            const profile: EmployeeFullProfile = {
+                                IDOperario: idNum,
+                                DescOperario: apiIdentity?.DescOperario || data.DescOperario || `Empleado ${docId}`,
+                                Activo: data.Activo ?? true,
+                                Productivo: apiIdentity?.Productivo ?? data.Productivo ?? true,
+                                Flexible: data.Flexible ?? false,
+                                IDDepartamento: apiIdentity ? apiIdentity.IDDepartamento : parseInt(data.IDDepartamento || '0', 10),
+                                DescDepartamento: apiIdentity?.DescDepartamento || data.DescDepartamento || data.Seccion || '',
+
+                                // Datos enriquecidos (Firebase es source of truth)
+                                FechaAntiguedad: data.FechaAntiguedad,
+                                NivelRetributivo: data.NivelRetributivo,
+                                Categoria: data.Categoria,
+                                Seccion: data.Seccion,
+                                TurnoHabitual: data.TurnoHabitual,
+                                UltimoFichaje: data.UltimoFichaje,
+                                Edad: data.Edad,
+                                NivelEstudios: data.NivelEstudios,
+                                FechaNacimiento: data.FechaNacimiento,
+                                updatedAt: data.updatedAt,
+                                updatedBy: data.updatedBy,
+                                hasPendingData: false
+                            };
+
+                            // Cargar subcolecciones
+                            if (includeCompetencias) {
+                                profile.competencias = await loadCompetencias(docId);
+                            }
+                            if (includeNotas) {
+                                profile.notas = await loadNotas(docId);
+                            }
+
+                            // Filtrado final activo (si la API dice inactivo y Firebase activo, o viceversa)
+                            // Respetamos lo solicitado en options.onlyActive
+                            if (onlyActive && !profile.Activo) continue;
+
+                            employeesData.push(profile);
+                        }
+
+                        setEmployees(employeesData);
+                        setLoading(false);
+                    },
+                    (err) => {
+                        logger.error('❌ Error suscripción:', err);
+                        setError('Error conectando a datos en vivo');
+                        setLoading(false);
+                    }
+                );
+            } catch {
+                setError('Error de conexión');
+                setLoading(false);
+            }
+        };
+
+        setupSubscription();
 
         return () => {
+            cancelled = true;
             if (unsubscribe) unsubscribe();
         };
 

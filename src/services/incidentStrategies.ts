@@ -157,7 +157,7 @@ export const generateGapStrategy = (
 
     // --- CASO 3 (Continuación): Salida Intermedia ---
     // Entrada Incidencia: 1 minuto después de la salida real (gapStart)
-    const entryTime = addMinutes(gapStart, 1);
+    const entryTime = gap.startFromBoundary ? gapStart : addMinutes(gapStart, 1);
     // Salida Incidencia: 1 minuto antes de la entrada real (gapEnd)
     const exitTime = addMinutes(gapEnd, -1);
 

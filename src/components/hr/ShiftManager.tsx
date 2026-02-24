@@ -63,7 +63,7 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
         if (selectedDepartment === 'all') {
             return employeeOptions;
         }
-        return employeeOptions.filter(emp => employeeDepartmentMap.get(emp.id) === selectedDepartment);
+        return employeeOptions.filter(emp => employeeDepartmentMap.get(Number(emp.id)) === selectedDepartment);
     }, [selectedDepartment, employeeOptions, employeeDepartmentMap]);
 
 
@@ -82,7 +82,7 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
     const filteredEmployees = useMemo(() => {
         if (selectedEmployeeIds.length > 0) {
             const numericIds = selectedEmployeeIds.map(id => parseInt(id, 10));
-            return employeeOptions.filter(emp => numericIds.includes(emp.id));
+            return employeeOptions.filter(emp => numericIds.includes(Number(emp.id)));
         }
         // Fallback to showing all employees in the selected department (or all if dept is 'all')
         return departmentFilteredEmployees;
@@ -216,7 +216,7 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
 
     const handleToggleAllVisible = (e: React.ChangeEvent<HTMLInputElement>) => {
         const isChecked = e.target.checked;
-        const visibleIds = sortedEmployees.map(emp => emp.id);
+        const visibleIds = sortedEmployees.map(emp => Number(emp.id));
 
         if (isChecked) {
             setBulkSelectionIds(prevIds => [...new Set([...prevIds, ...visibleIds])]);
@@ -237,7 +237,7 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
 
     const isAllVisibleSelected = useMemo(() => {
         if (sortedEmployees.length === 0) return false;
-        return sortedEmployees.every(emp => bulkSelectionIds.includes(emp.id));
+        return sortedEmployees.every(emp => bulkSelectionIds.includes(Number(emp.id)));
     }, [sortedEmployees, bulkSelectionIds]);
 
     const handleExportExcel = useCallback(() => {
@@ -399,16 +399,16 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
                     </thead>
                     <tbody>
                         {sortedEmployees.map(emp => (
-                            <tr key={emp.id} className={`hover:bg-slate-50 ${bulkSelectionIds.includes(emp.id) ? 'bg-blue-50' : 'bg-white'}`}>
-                                <td className={`px-2 py-2 border border-slate-200 sticky left-0 z-10 ${bulkSelectionIds.includes(emp.id) ? 'bg-blue-50' : 'bg-white'}`}>
+                            <tr key={emp.id} className={`hover:bg-slate-50 ${bulkSelectionIds.includes(Number(emp.id)) ? 'bg-blue-50' : 'bg-white'}`}>
+                                <td className={`px-2 py-2 border border-slate-200 sticky left-0 z-10 ${bulkSelectionIds.includes(Number(emp.id)) ? 'bg-blue-50' : 'bg-white'}`}>
                                     <input
                                         type="checkbox"
-                                        checked={bulkSelectionIds.includes(emp.id)}
-                                        onChange={() => handleToggleOne(emp.id)}
+                                        checked={bulkSelectionIds.includes(Number(emp.id))}
+                                        onChange={() => handleToggleOne(Number(emp.id))}
                                         className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                     />
                                 </td>
-                                <td className={`px-4 py-2 font-medium text-slate-900 border border-slate-200 whitespace-nowrap sticky left-10 z-10 ${bulkSelectionIds.includes(emp.id) ? 'bg-blue-50' : 'bg-white'}`}>{emp.name}</td>
+                                <td className={`px-4 py-2 font-medium text-slate-900 border border-slate-200 whitespace-nowrap sticky left-10 z-10 ${bulkSelectionIds.includes(Number(emp.id)) ? 'bg-blue-50' : 'bg-white'}`}>{emp.name}</td>
                                 {daysInRange.map(day => {
                                     const dateStr = toISODateLocal(day);
                                     const shiftCode = shiftsMap.get(`${emp.id}-${dateStr}`) || 'L';
@@ -417,7 +417,7 @@ const ShiftManager: React.FC<ShiftManagerProps> = ({ shifts, setShifts, erpData 
                                         <td key={dateStr} className={`border border-slate-200 p-0`}>
                                             <select
                                                 value={shiftCode}
-                                                onChange={(e) => handleSingleShiftChange(emp.id, dateStr, e.target.value as ShiftCode)}
+                                                onChange={(e) => handleSingleShiftChange(Number(emp.id), dateStr, e.target.value as ShiftCode)}
                                                 className={`w-full h-full text-center p-2 border-0 rounded-none appearance-none focus:ring-2 focus:ring-blue-500 ${shiftInfo.color}`}
                                                 title={`${emp.name} - ${day.toLocaleDateString()}: ${shiftInfo.label}`}
                                             >

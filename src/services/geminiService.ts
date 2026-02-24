@@ -1,28 +1,37 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { RawDataRow } from "../types";
+import { Operario } from "./erpApi";
 import { getGeminiClientApiKey, getGeminiDisabledMessage } from '../config/aiConfig';
 
 const apiKey = getGeminiClientApiKey();
 // Initialize only if key exists to prevent immediate crash, handle missing key inside functions
 const ai = apiKey ? new GoogleGenAI({ apiKey: apiKey }) : null;
 
-export const getGeminiAnalysis = async (filteredRawData: RawDataRow[], motivos: { IDMotivo: string; DescMotivo: string }[]): Promise<string> => {
+export const getGeminiAnalysis = async (filteredRawData: RawDataRow[], motivos: { IDMotivo: string; DescMotivo: string }[], operarios?: Operario[]): Promise<string> => {
     if (!ai) {
         return `⚠️ ${getGeminiDisabledMessage()}`;
     }
 
     const motivosList = motivos.map(m => `- ID ${m.IDMotivo}: ${m.DescMotivo}`).join('\n');
 
+    // Crear mapa de estado productivo/improductivo
+    const productivoMap = new Map<string, boolean>();
+    if (operarios) {
+        operarios.forEach(op => {
+            productivoMap.set(String(op.IDOperario), !!op.Productivo);
+        });
+    }
+
     try {
-        const systemInstruction = `Actúas como un analista experto en Recursos Humanos. Tu tarea es analizar los datos de fichajes proporcionados y generar un informe estructurado y claro en formato Markdown.
+        const systemInstruction = `Actúas como un analista experto en Recursos Humanos. Tu tarea es analizar los datos de fichajes proporcionados y generar un informe estructurado y claro en formato Markdown. RECUERDA: RESPONDE ESTRICTAMENTE EN ESPAÑOL.
 
 **Contexto - Códigos de Incidencia Definidos en ERP:**
 ${motivosList}
 
 **Formato de Datos de Entrada:**
 Los datos se proporcionan en un objeto JSON con dos claves:
-- \`headers\`: Un array con los nombres de las columnas (ej: ["IDOperario", "Fecha", "Hora", ...]).
+- \`headers\`: Un array con los nombres de las columnas (ej: ["IDOperario", "Fecha", "Hora", "Productivo", ...]).
 - \`rows\`: Un array de arrays, donde cada array interno es una fila y sus valores se corresponden en orden con las \`headers\`.
 
 **Reglas de Análisis Obligatorias:**
@@ -39,14 +48,19 @@ Los datos se proporcionan en un objeto JSON con dos claves:
 4.  **Análisis de Ausencias y Bajas:**
     *   **Ausencias:** Lista todas las ausencias registradas donde Entrada es 0 y el Motivo es computable.
     *   **Tipificación:** Usa la lista de códigos de incidencia provista para identificar el tipo de ausencia.
-5.  **Análisis de Jornadas Partidas:**
+5.  **Análisis de Productividad (COMPARATIVA CRÍTICA):**
+    *   Los datos de entrada incluyen una columna indicando si el operario es 'Productivo' (SÍ/NO).
+    *   **DEBES CALCULAR Y MOSTRAR LOS DATOS TOTALES** (Suma de horas trabajadas, suma de excesos, cantidad de ausencias, cantidad de retrasos) divididos estrictamente entre personal Productivo e Improductivo.
+    *   Al analizar jornadas, excesos o ausencias, **DEBES SEPARAR u INCLUIR UNA COMPARATIVA CLARA** entre los operarios Productivos y los Improductivos.
+    *   Por ejemplo, destaca si las incidencias o excesos de jornada se concentran más en personal Productivo (directo a fabricación) o Improductivo (estructura/oficina).
+6.  **Análisis de Jornadas Partidas:**
     *   Una jornada partida ocurre cuando un empleado ficha 'FIN DE JORNADA' y vuelve a fichar una entrada en el mismo día.
     *   Identifica estos casos y calcula la duración de la interrupción.
 
 **Reglas de Estructura del Informe (CRÍTICO):**
 
 Debes analizar los datos **DÍA POR DÍA**. Si el periodo abarca más de un día, genera una sección separada para cada fecha.
-Analiza primero un día completo, presenta sus tablas, y luego pasa al siguiente día.
+Analiza primero un día completo, presenta sus tablas, y luego pasa al siguiente día.  Al final de todos los días, añade una sección final de "Análisis Global de Productividad".
 
 **Estructura de Salida Requerida (Repetir para CADA FECHA encontrada en orden cronológico):**
 
@@ -68,11 +82,17 @@ Analiza primero un día completo, presenta sus tablas, y luego pasa al siguiente
 | [ID] | [Nombre] | [HH:MM] | [X minutos] |
 
 ## 📋 Incidencias, Ausencias y Bajas (Solo si existen en este día)
-| ID Operario | Empleado | Tipo | Detalle |
-|---|---|---|---|
-| [ID] | [Nombre] | [Tipo] | [Descripción] |
+| ID Operario | Empleado | Productivo | Tipo | Detalle |
+|---|---|---|---|---|
+| [ID] | [Nombre] | [SÍ/NO] | [Tipo] | [Descripción] |
 
 ---
+
+## 📊 Análisis Global de Productividad (Al final del informe)
+| Tipo | Total Trabajadas | Total Excesos | Total Retrasos | Total Ausencias | Observaciones |
+|---|---|---|---|---|---|
+| **Productivos** | [Suma h] | [Suma h] | [Cantidad] | [Cantidad] | [Tus conclusiones sobre cómo les afecta] |
+| **Improductivos** | [Suma h] | [Suma h] | [Cantidad] | [Cantidad] | [Tus conclusiones sobre cómo les afecta] |
 
 **Nota Final:**
 *   Si un día no tiene incidencias de ningún tipo, indica bajo el encabezado de la fecha: "Sin incidencias relevantes registradas." y no generes tablas vacías.
@@ -104,8 +124,23 @@ Analiza primero un día completo, presenta sus tablas, y luego pasa al siguiente
         }
 
         // Only send necessary columns to reduce token count
-        const essentialHeaders: (keyof RawDataRow)[] = ['IDOperario', 'DescOperario', 'Fecha', 'Hora', 'Entrada', 'MotivoAusencia', 'DescMotivoAusencia', 'TurnoTexto'];
-        const rows = dataToSend.map(row => essentialHeaders.map(header => row[header]));
+        const essentialHeaders = ['IDOperario', 'DescOperario', 'Productivo', 'Fecha', 'Hora', 'Entrada', 'MotivoAusencia', 'DescMotivoAusencia', 'TurnoTexto'];
+        const rows = dataToSend.map(row => {
+            const idOperarioStr = String(row.IDOperario);
+            const esProductivo = productivoMap.has(idOperarioStr) ? (productivoMap.get(idOperarioStr) ? 'SÍ' : 'NO') : 'Desconocido';
+
+            return [
+                row.IDOperario,
+                row.DescOperario,
+                esProductivo,
+                row.Fecha,
+                row.Hora,
+                row.Entrada,
+                row.MotivoAusencia,
+                row.DescMotivoAusencia,
+                row.TurnoTexto
+            ];
+        });
 
         const compactData = {
             headers: essentialHeaders,

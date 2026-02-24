@@ -198,8 +198,8 @@ export const generateProcessedData = (
 
     // Initialize from provided users
     userMap.forEach(user => {
-        if (user.appRole !== 'HR' && !EXCLUDE_EMPLOYEE_IDS.has(user.id)) {
-            getOrCreateEmployee(user.id);
+        if (user.appRole !== 'HR' && !EXCLUDE_EMPLOYEE_IDS.has(Number(user.id))) {
+            getOrCreateEmployee(Number(user.id));
         }
     });
 
@@ -1441,21 +1441,28 @@ export const generateProcessedData = (
             // --- Detect Vacation Conflicts (NEW: Cambio 1) ---
             // Check if employee has vacations (TipoDiaEmpresa = 2) on days they also have punches
             const vacationDates = new Set<string>();
+            const normalPunchDates = new Set<string>();
+            const sickLeaveDates = new Set<string>();
+
             allRows.forEach(r => {
+                const dateKey = normalizeDateStr(r.Fecha);
+                const ma = getMotivoAusencia(r.MotivoAusencia);
+
                 if (r.TipoDiaEmpresa === 2) {
-                    vacationDates.add(normalizeDateStr(r.Fecha));
+                    vacationDates.add(dateKey);
+                }
+
+                if (isEntrada(r.Entrada) && (ma === null || ma === 0 || ma === 1)) {
+                    normalPunchDates.add(dateKey);
+                }
+
+                if (ma === 10 || ma === 11) {
+                    sickLeaveDates.add(dateKey);
                 }
             });
 
-            // Check if any of these vacation dates also have normal punches (Entrada=true)
             vacationDates.forEach(vDate => {
-                const hasPunches = allRows.some(r => {
-                    const ma = getMotivoAusencia(r.MotivoAusencia);
-                    return normalizeDateStr(r.Fecha) === vDate &&
-                        isEntrada(r.Entrada) &&
-                        (ma === null || ma === 0 || ma === 1);
-                });
-                if (hasPunches && !employee.vacationConflicts!.includes(vDate)) {
+                if (normalPunchDates.has(vDate) && !employee.vacationConflicts!.includes(vDate)) {
                     employee.vacationConflicts!.push(vDate);
                 }
             });
@@ -1470,6 +1477,10 @@ export const generateProcessedData = (
             const end = new Date(analysisEnd);
             const curr = new Date(start);
             let absentGuard = 0;
+            const employeeCalendarMap = employeeCalendars?.get(employeeId);
+            const gapDates = new Set(employee.unjustifiedGaps.map(g => g.date));
+            const deviationDates = new Set(employee.workdayDeviations.map(d => d.date));
+            const missingClockOutSet = new Set(employee.missingClockOuts || []);
 
             while (curr <= end) {
                 absentGuard++;
@@ -1503,35 +1514,27 @@ export const generateProcessedData = (
                             // CRITICAL FIX: Ensure day is not marked absent if there is ANY activity, 
                             // or if identified as having gaps/modifications/missing-outs.
                             const hasActivity = datesWithActivity.has(dateStr);
-                            const hasGaps = employee.unjustifiedGaps.some(g => g.date === dateStr);
-                            const hasDeviations = employee.workdayDeviations.some(d => d.date === dateStr);
-                            const hasMissingOut = employee.missingClockOuts && employee.missingClockOuts.some(m => m === dateStr);
+                            const hasGaps = gapDates.has(dateStr);
+                            const hasDeviations = deviationDates.has(dateStr);
+                            const hasMissingOut = missingClockOutSet.has(dateStr);
 
                             // ✅ NUEVO (Bug Fix): Verificar si el empleado tiene vacaciones ese día
                             // Primero verificar en el calendario del empleado (TipoDia=2)
                             // Si no hay calendario, verificar en fichajes (TipoDiaEmpresa=2)
                             let hasVacation = false;
 
-                            if (employeeCalendars && employeeCalendars.has(employeeId)) {
-                                const empCal = employeeCalendars.get(employeeId)!;
-                                const tipoDia = empCal.get(dateStr);
+                            if (employeeCalendarMap) {
+                                const tipoDia = employeeCalendarMap.get(dateStr);
                                 hasVacation = String(tipoDia) === '2'; // TipoDia=2 => Vacaciones
                             }
 
                             // Fallback: verificar en los datos de fichajes
                             if (!hasVacation) {
-                                hasVacation = allRows.some(r =>
-                                    normalizeDateStr(r.Fecha) === dateStr &&
-                                    r.TipoDiaEmpresa === 2
-                                );
+                                hasVacation = vacationDates.has(dateStr);
                             }
 
                             // ⚠️ CRITICAL FIX #2: Verificar si el empleado tiene BAJA MÉDICA activa ese día (ITAT=10 o ITEC=11)
-                            let hasSickLeave = allRows.some(r => {
-                                if (normalizeDateStr(r.Fecha) !== dateStr) return false;
-                                const motivo = r.MotivoAusencia;
-                                return motivo === 10 || motivo === 11; // ITAT o ITEC
-                            });
+                            const hasSickLeave = sickLeaveDates.has(dateStr);
 
                             if (!hasActivity && !hasGaps && !hasDeviations && !hasMissingOut && !hasVacation && !hasSickLeave) {
                                 employee.absentDays.push(dateStr);

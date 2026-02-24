@@ -76,6 +76,15 @@ const sanitizeServerError = (value: string, maxLen = 140): string => {
     return clean.substring(0, maxLen);
 };
 
+const parseEntradaFlag = (value: unknown): 0 | 1 => {
+    if (value === true || value === 1 || value === -1) return 1;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['1', '-1', 'true', 'si', 'sí', 's', 'x'].includes(normalized)) return 1;
+    }
+    return 0;
+};
+
 // Helper con Timeout para evitar bloqueos
 const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout = 15000) => {
     const controller = new AbortController();
@@ -168,8 +177,6 @@ export const fetchFichajes = async (
                     ...(shortEnd && { horaFin: shortEnd })
                 });
             }
-
-            timeVariants.push({});
         } else {
             timeVariants.push({});
         }
@@ -195,7 +202,7 @@ export const fetchFichajes = async (
                             'Accept': 'application/json'
                         },
                         body: JSON.stringify(payload)
-                    }, 30000);
+                    }, 60000);
 
                     if (!response.ok) {
                         lastStatus = response.status;
@@ -227,23 +234,39 @@ export const fetchFichajes = async (
         }
 
 
-        const mappedData = data.map((item: any) => ({
-            IDControlPresencia: item.IDControlPresencia || 0,
-            DescDepartamento: item.DescDepartamento || 'General',
-            IDOperario: typeof item.IDOperario === 'string' ? parseInt(item.IDOperario, 10) : item.IDOperario,
-            DescOperario: item.DescOperario || 'Desconocido',
-            Fecha: normalizeDateKey(formatApiDateToApp(item.Fecha)),
-            Hora: extractTimeHHMMSS(formatApiTimeToApp(item.Hora)),
-            Entrada: (item.Entrada === true || item.Entrada === 1 || item.Entrada === '1') ? 1 : 0,
-            MotivoAusencia: item.MotivoAusencia ? parseInt(item.MotivoAusencia as string, 10) : null,
-            DescMotivoAusencia: item.DescMotivoAusencia || item.DescMotivo || '',
-            Computable: (item.Computable === false || item.Computable === 0 || item.Computable === 'No') ? 'No' : 'Sí',
-            IDTipoTurno: item.IDTipoTurno ? String(item.IDTipoTurno) : null,
-            Inicio: extractTimeHHMM(item.Inicio || ''),
-            Fin: extractTimeHHMM(item.Fin || ''),
-            TipoDiaEmpresa: typeof item.TipoDiaEmpresa === 'number' ? item.TipoDiaEmpresa : (parseInt(item.TipoDiaEmpresa as string, 10) || 0),
-            TurnoTexto: item.DescTipoTurno || item.TurnoTexto || ''
-        }));
+        const mappedData = data.map((item: any) => {
+            const motivoRaw = item.MotivoAusencia;
+            const motivo = (motivoRaw === null || motivoRaw === undefined || motivoRaw === '')
+                ? null
+                : parseInt(String(motivoRaw), 10);
+
+            const parsedEntrada = parseEntradaFlag(item.Entrada);
+            const descMotivo = item.DescMotivoAusencia || item.DescMotivo || '';
+
+            // Fallback robusto: algunos entornos ERP devuelven "Entrada" en formatos no estandar.
+            // Si no hay motivo de salida y no hay descripcion de motivo, tratarlo como ENTRADA.
+            const entrada = parsedEntrada === 1
+                ? 1
+                : ((motivo === null || motivo === 0) && !descMotivo ? 1 : 0);
+
+            return {
+                IDControlPresencia: item.IDControlPresencia || 0,
+                DescDepartamento: item.DescDepartamento || 'General',
+                IDOperario: typeof item.IDOperario === 'string' ? parseInt(item.IDOperario, 10) : item.IDOperario,
+                DescOperario: item.DescOperario || 'Desconocido',
+                Fecha: normalizeDateKey(formatApiDateToApp(item.Fecha)),
+                Hora: extractTimeHHMMSS(formatApiTimeToApp(item.Hora)),
+                Entrada: entrada,
+                MotivoAusencia: Number.isNaN(motivo as number) ? null : motivo,
+                DescMotivoAusencia: descMotivo,
+                Computable: (item.Computable === false || item.Computable === 0 || item.Computable === 'No') ? 'No' : 'Sí',
+                IDTipoTurno: item.IDTipoTurno ? String(item.IDTipoTurno) : null,
+                Inicio: extractTimeHHMM(item.Inicio || ''),
+                Fin: extractTimeHHMM(item.Fin || ''),
+                TipoDiaEmpresa: typeof item.TipoDiaEmpresa === 'number' ? item.TipoDiaEmpresa : (parseInt(item.TipoDiaEmpresa as string, 10) || 0),
+                TurnoTexto: item.DescTipoTurno || item.TurnoTexto || ''
+            };
+        });
 
         return mappedData;
 
@@ -291,15 +314,77 @@ export const fetchFichajesBatched = async (
     idOperario: string = '',
     horaInicio: string = '',
     horaFin: string = '',
-    batchDays = 5 // Reduced to 5 for safer chunks
+    batchDays = 7 // Optimizado para semanas
 ): Promise<RawDataRow[]> => {
     if (!startDate || !endDate) return [];
 
-    // Helper to calculate days diff
     const getDaysDiff = (s: string, e: string) => {
         const d1 = new Date(`${s}T00:00:00`);
         const d2 = new Date(`${e}T23:59:59`);
         return Math.ceil(Math.abs(d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24));
+    };
+
+    const normalizeChunkError = (err: unknown): string => {
+        if (err instanceof Error) return err.message;
+        return 'Error desconocido obteniendo bloque de fichajes';
+    };
+
+    const chunkRowsByHalf = (chunk: { start: string; end: string }): { start: string; end: string }[] => {
+        const start = new Date(`${chunk.start}T00:00:00`);
+        const end = new Date(`${chunk.end}T00:00:00`);
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) {
+            return [chunk];
+        }
+
+        const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        if (totalDays <= 1) return [chunk];
+
+        const midDays = Math.max(1, Math.floor(totalDays / 2));
+        const mid = addDays(start, midDays - 1);
+        const secondStart = addDays(mid, 1);
+
+        return [
+            { start: toIsoDate(start), end: toIsoDate(mid) },
+            { start: toIsoDate(secondStart), end: toIsoDate(end) }
+        ];
+    };
+
+    const fetchChunkWithRetry = async (chunk: { start: string; end: string }, retries = 2): Promise<RawDataRow[]> => {
+        let lastError: unknown;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                return await fetchFichajes(chunk.start, chunk.end, idOperario, horaInicio, horaFin);
+            } catch (err) {
+                lastError = err;
+                if (attempt < retries) {
+                    const waitMs = 400 * Math.pow(2, attempt);
+                    await new Promise(resolve => setTimeout(resolve, waitMs));
+                }
+            }
+        }
+        throw new Error(normalizeChunkError(lastError));
+    };
+
+    const dedupeRows = (rows: RawDataRow[]): RawDataRow[] => {
+        const seen = new Set<string>();
+        const unique: RawDataRow[] = [];
+        for (const row of rows) {
+            const key = row.IDControlPresencia && row.IDControlPresencia > 0
+                ? `id:${row.IDControlPresencia}`
+                : `k:${row.IDOperario}|${row.Fecha}|${row.Hora}|${row.Entrada}|${row.MotivoAusencia ?? ''}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            unique.push(row);
+        }
+
+        unique.sort((a, b) => {
+            if (a.Fecha !== b.Fecha) return a.Fecha.localeCompare(b.Fecha);
+            const t = a.Hora.localeCompare(b.Hora);
+            if (t !== 0) return t;
+            return Number(a.IDOperario) - Number(b.IDOperario);
+        });
+
+        return unique;
     };
 
     const totalDays = getDaysDiff(startDate, endDate);
@@ -325,29 +410,57 @@ export const fetchFichajesBatched = async (
     }
 
     const results: RawDataRow[] = [];
-    const CONCURRENCY_LIMIT = 3; // Max parallel requests
+    const CONCURRENCY_LIMIT = 1; // Priorizar estabilidad sobre velocidad
+    const failedChunks: Array<{ chunk: { start: string; end: string }; error: string }> = [];
 
     // Execute chunks with throttling
     for (let i = 0; i < chunks.length; i += CONCURRENCY_LIMIT) {
         const batch = chunks.slice(i, i + CONCURRENCY_LIMIT);
         const promises = batch.map(chunk =>
-            fetchFichajes(chunk.start, chunk.end, idOperario, horaInicio, horaFin)
+            fetchChunkWithRetry(chunk)
                 .catch(err => {
-                    console.error(`Error fetching batch ${chunk.start}-${chunk.end}:`, err);
-                    return [] as RawDataRow[]; // Fail gracefully for that chunk
+                    const message = normalizeChunkError(err);
+                    console.error(`Error fetching batch ${chunk.start}-${chunk.end}:`, message);
+                    failedChunks.push({ chunk, error: message });
+                    return null;
                 })
         );
 
         const batchResults = await Promise.all(promises);
-        batchResults.forEach(r => results.push(...r));
+        batchResults.forEach(r => {
+            if (r) results.push(...r);
+        });
 
-        // Small delay between super-batches to be nice to the server
         if (i + CONCURRENCY_LIMIT < chunks.length) {
-            await new Promise(resolve => setTimeout(resolve, 300));
+            await new Promise(resolve => setTimeout(resolve, 500)); // Delay aumentado
         }
     }
 
-    return results;
+    if (failedChunks.length > 0) {
+        const recovered = await Promise.all(failedChunks.map(async ({ chunk }) => {
+            const halfChunks = chunkRowsByHalf(chunk);
+            const partial: RawDataRow[] = [];
+
+            for (const half of halfChunks) {
+                try {
+                    const rows = await fetchChunkWithRetry(half, 1);
+                    partial.push(...rows);
+                } catch (err) {
+                    throw new Error(`Bloque ${half.start} -> ${half.end}: ${normalizeChunkError(err)}`);
+                }
+            }
+
+            return partial;
+        }));
+
+        recovered.forEach(rows => results.push(...rows));
+    }
+
+    if (results.length === 0 && chunks.length > 0) {
+        throw new Error('No se pudo obtener información del periodo solicitado desde Swagger. Verifica conexión y vuelve a intentar.');
+    }
+
+    return dedupeRows(results);
 };
 
 export const insertFichaje = async (fichaje: Partial<RawDataRow>, userName: string = "AppUser") => {

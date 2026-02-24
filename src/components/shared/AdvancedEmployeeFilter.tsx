@@ -24,7 +24,7 @@ const AdvancedEmployeeFilter: React.FC<AdvancedEmployeeFilterProps> = ({
     // Convert User[] to Operario[] for compatibility with EmployeeMultiSelect
     const options: Operario[] = useMemo(() => {
         return employeesToShow.map(u => ({
-            IDOperario: u.id,
+            IDOperario: Number(u.id),
             DescOperario: u.name,
             IDDepartamento: 0, // Mock/Unknown as User type doesn't have it
             DescDepartamento: String(u.role), // Mapping role to Dept for display purposes if needed

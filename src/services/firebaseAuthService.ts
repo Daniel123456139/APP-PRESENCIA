@@ -7,7 +7,8 @@ export interface AppAuthUser {
   uid: string;
   email: string;
   displayName: string;
-  appRole: 'HR' | 'EMPLOYEE' | 'MANAGEMENT';
+  appRole: 'HR' | 'EMPLOYEE' | 'MANAGEMENT' | 'OPERADOR' | 'GESTOR_TRABAJOS' | 'SUPER_ADMIN';
+  rolUnificado: string;
   erpEmployeeId: number;
 }
 
@@ -98,44 +99,58 @@ export function subscribeToAuthChanges(callback: (user: AppAuthUser | null) => v
 // --- Helpers Internos ---
 
 async function fetchUserProfile(user: FirebaseUser): Promise<AppAuthUser> {
-  // Use the initialized DB with persistence
   const db = getFirebaseDb();
+  let rolUnificado = 'USER';
+  let displayName = user.displayName || 'Usuario';
+  let erpEmployeeId = 0;
 
-  // Intentar obtener rol de base de datos, si no existe, inferir por email
   try {
-    // Modular SDK: doc(db, collection, id) y getDoc(ref)
-    const userDocRef = doc(db, 'users', user.uid);
+    // 1. Intentar leer desde la nueva colección USUARIOS unificada
+    const userDocRef = doc(db, 'USUARIOS', user.uid);
     const userDoc = await getDoc(userDocRef);
 
     if (userDoc.exists()) {
       const data = userDoc.data();
-      if (data?.isActive === false) throw new Error('Usuario desactivado.');
+      if (data?.activo === false) throw new Error('Usuario desactivado.');
 
-      return {
-        uid: user.uid,
-        email: user.email || '',
-        displayName: data?.displayName || 'Usuario',
-        appRole: data?.role,
-        erpEmployeeId: data?.erpEmployeeId
-      };
+      rolUnificado = data?.rol || 'USER';
+      displayName = data?.nombre || displayName;
+    } else {
+      // 2. Fallback: usar custom claims
+      const tokenResult = await user.getIdTokenResult();
+      rolUnificado = (tokenResult.claims.rol as string) || 'USER';
     }
-  } catch (e) {
-    console.warn("No se pudo conectar a Firestore, usando perfil local temporal.", e);
+  } catch (e: any) {
+    if (e.message === 'Usuario desactivado.') throw e;
+    console.warn("Error leyendo perfil de Firestore, usando fallback:", e);
+    try {
+      const tokenResult = await user.getIdTokenResult();
+      rolUnificado = (tokenResult.claims.rol as string) || rolUnificado;
+      displayName = (tokenResult.claims.nombre as string) || displayName;
+    } catch (tokenError) {
+      console.warn('No se pudo leer el rol desde custom claims:', tokenError);
+    }
   }
 
-  // Fallback si no hay DB conectada: Usar lista local MOCK para definir roles
-  const localDef = MOCK_AUTH_USERS.find(u => u.email.toLowerCase() === user.email?.toLowerCase());
-  if (localDef) {
-    return { ...localDef, uid: user.uid };
+  // Mapeo a roles internos de la App Presencia (para compatibilidad de UI existente)
+  let appRole: AppAuthUser['appRole'] = 'EMPLOYEE';
+  if (rolUnificado === 'SUPER_ADMIN') {
+    appRole = 'SUPER_ADMIN';
+  } else if (rolUnificado === 'RRHH') {
+    appRole = 'HR';
+  } else if (rolUnificado === 'OPERADOR') {
+    appRole = 'OPERADOR';
+  } else if (rolUnificado === 'GESTOR_TRABAJOS') {
+    appRole = 'GESTOR_TRABAJOS';
   }
 
-  // Fallback final por defecto
   return {
     uid: user.uid,
     email: user.email || '',
-    displayName: user.displayName || 'Usuario',
-    appRole: 'EMPLOYEE',
-    erpEmployeeId: 0
+    displayName,
+    appRole,
+    rolUnificado,
+    erpEmployeeId
   };
 }
 

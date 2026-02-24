@@ -26,6 +26,7 @@ export interface EmployeeOption {
 
 export interface IncidentManagerHandle {
     handleIncidentClick: (employee: ProcessedDataRow) => void;
+    handleAbsenceIncidentClick: (employee: ProcessedDataRow) => void;
     handleOpenManualIncident: (employee: ProcessedDataRow) => void;
     handleOpenLateArrivals: (data: ProcessedDataRow[]) => void;
     handleOpenAdjustmentModal: (data: RawDataRow[], shifts: Map<number, string>) => void;
@@ -86,6 +87,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
     // UI state for modals (moved from HrPortal)
     const [selectedEmployeeForIncident, setSelectedEmployeeForIncident] = useState<ProcessedDataRow | null>(null);
     const [isRecordIncidentModalOpen, setIsRecordIncidentModalOpen] = useState(false);
+    const [recordIncidentScope, setRecordIncidentScope] = useState<'single' | 'allAbsentDays'>('single');
 
     const [selectedEmployeeForManual, setSelectedEmployeeForManual] = useState<ProcessedDataRow | null>(null);
     const [isManualIncidentModalOpen, setIsManualIncidentModalOpen] = useState(false);
@@ -127,6 +129,12 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
 
     useImperativeHandle(ref, () => ({
         handleIncidentClick: (employee) => {
+            setRecordIncidentScope('single');
+            setSelectedEmployeeForIncident(employee);
+            setIsRecordIncidentModalOpen(true);
+        },
+        handleAbsenceIncidentClick: (employee) => {
+            setRecordIncidentScope('allAbsentDays');
             setSelectedEmployeeForIncident(employee);
             setIsRecordIncidentModalOpen(true);
         },
@@ -195,6 +203,24 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
         if (!timeStr) return '';
         const clean = timeStr.replace(' (+1)', '');
         return clean.substring(0, 5);
+    };
+
+    const isWeekendDate = (dateStr: string): boolean => {
+        const date = new Date(`${dateStr}T00:00:00`);
+        const day = date.getDay();
+        return day === 0 || day === 6;
+    };
+
+    const ensureErpConfirmedSave = (
+        result: { successCount: number; queuedCount: number },
+        context: string
+    ) => {
+        if (result.queuedCount > 0) {
+            throw new Error(`${context}: ${result.queuedCount} registro(s) quedaron en cola offline. No se confirma grabacion en ERP.`);
+        }
+        if (result.successCount === 0) {
+            throw new Error(`${context}: no se confirmaron registros en ERP.`);
+        }
     };
 
     const handleManualIncidentSave = async (data: ManualIncidentData) => {
@@ -297,6 +323,8 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                 userName: 'RRHH'
             });
 
+            ensureErpConfirmedSave(result, 'Incidencia manual');
+
             // Logging Synthetic Punches to Firestore ONLY IF QUEUED
             if (result.queuedCount > 0) {
                 const newRows = [entryRow, exitRow];
@@ -329,7 +357,8 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
         if (incident.type === 'gap') {
             const gapData = incident.data as UnjustifiedGap;
             const gapStart = normalizeGapTime(gapData.start || '');
-            return `gap-${employee.operario}-${gapData.date}-${gapStart}`;
+            const gapEnd = normalizeGapTime(gapData.end || '');
+            return `gap-${employee.operario}-${gapData.date}-${gapStart}-${gapEnd}`;
         }
         if (incident.type === 'workday') {
             const workdayData = incident.data as WorkdayDeviation;
@@ -375,6 +404,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     newRows: strategyResult.rowsToInsert as RawDataRow[],
                     userName: 'RRHH'
                 });
+                ensureErpConfirmedSave(result, 'Justificacion de incidencia');
                 didSave = true;
 
                 // LOGGING SYNTHETIC PUNCHES TO FIRESTORE (SIDECAR) - ONLY IF QUEUED
@@ -433,7 +463,9 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
             if (error instanceof Error) {
                 console.error("Error justifying incident:", error.message);
                 showNotification(`Error: ${error.message}`, "error");
+                throw error;
             }
+            throw error;
         }
     };
 
@@ -446,6 +478,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     employeeData={selectedEmployeeForIncident}
                     onJustify={handleJustifyIncident}
                     justifiedKeys={justifiedIncidentKeys}
+                    registerScope={recordIncidentScope}
                 />
             )}
 
@@ -525,11 +558,18 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                                 dates.push(toISODateLocal(d));
                             }
 
+                            const laborableDates = dates.filter(date => !isWeekendDate(date));
+                            const skippedWeekendDates = dates.length - laborableDates.length;
+
+                            if (laborableDates.length === 0) {
+                                throw new Error('El periodo seleccionado solo incluye fin de semana. No se ha grabado ninguna incidencia.');
+                            }
+
                             const emp = futureIncidentsEmployees.find(e => e.id === employeeId);
                             const allIncidents: Partial<RawDataRow>[] = [];
 
                             // Procesar cada fecha individualmente
-                            for (const date of dates) {
+                            for (const date of laborableDates) {
                                 // 1. Obtener fichajes existentes de ese día
                                 const existingPunches = await getFichajes(date, date, employeeId.toString());
 
@@ -608,12 +648,18 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                             }
 
                             // 5. Guardar todos los fichajes
+                            if (allIncidents.length === 0) {
+                                throw new Error('No se generaron fichajes para el periodo indicado.');
+                            }
+
                             validateRowsBeforeSave(allIncidents as RawDataRow[]);
 
                             const result = await addIncidents({
                                 newRows: allIncidents as RawDataRow[],
                                 userName: 'RRHH'
                             });
+
+                            ensureErpConfirmedSave(result, 'Registro por periodo');
 
                             // 6. Log en Firestore para auditoría - ONLY IF QUEUED
                             if (result.queuedCount > 0) {
@@ -631,14 +677,17 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                                 }
                             }
 
-                            showNotification(`✅ Incidencias futuras registradas: ${dates.length} día(s) para ${employeeName}`, 'success');
+                            const weekendMsg = skippedWeekendDates > 0 ? ` (${skippedWeekendDates} fin(es) de semana omitido(s))` : '';
+                            showNotification(`✅ Incidencias futuras registradas: ${laborableDates.length} día(s) para ${employeeName}${weekendMsg}`, 'success');
                             console.log(`✅ [FUTURE INCIDENTS] ${allIncidents.length} fichajes creados correctamente`);
                             onRefreshNeeded();
                         } catch (error: unknown) {
                             if (error instanceof Error) {
                                 console.error('❌ [FUTURE INCIDENTS] Error:', error.message);
                                 showNotification(`Error: ${error.message}`, 'error');
+                                throw error;
                             }
+                            throw error;
                         }
                     }}
                 />

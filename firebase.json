@@ -1,5 +1,27 @@
 {
+    "functions": {
+        "source": "functions"
+    },
     "firestore": {
         "rules": "firestore.rules"
+    },
+    "hosting": {
+        "site": "app-presencia",
+        "public": "dist",
+        "ignore": [
+            "firebase.json",
+            "**/.*",
+            "**/node_modules/**"
+        ],
+        "rewrites": [
+            {
+                "source": "/api/erp/**",
+                "function": "erpProxy"
+            },
+            {
+                "source": "**",
+                "destination": "/index.html"
+            }
+        ]
     }
 }

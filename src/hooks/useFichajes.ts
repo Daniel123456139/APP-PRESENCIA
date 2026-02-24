@@ -13,10 +13,10 @@ import { validateNewIncidents } from '../services/validationService';
 // --- Keys ---
 export const FICHAJES_KEYS = {
     all: ['fichajes'] as const,
-    list: (start: string, end: string) => ['fichajes', { start, end }] as const,
+    list: (start: string, end: string, startTime: string, endTime: string) => ['fichajes', { start, end, startTime, endTime }] as const,
 };
 
-export const useFichajes = (startDate: string, endDate: string) => {
+export const useFichajes = (startDate: string, endDate: string, startTime: string = '00:00', endTime: string = '23:59') => {
     const getRangeDays = (start: string, end: string) => {
         const startMs = new Date(`${start}T00:00:00`).getTime();
         const endMs = new Date(`${end}T23:59:59`).getTime();
@@ -25,21 +25,24 @@ export const useFichajes = (startDate: string, endDate: string) => {
     };
 
     const { data, isLoading, isFetching, dataUpdatedAt, error, refetch } = useQuery({
-        queryKey: FICHAJES_KEYS.list(startDate, endDate),
+        queryKey: FICHAJES_KEYS.list(startDate, endDate, startTime, endTime),
         queryFn: async () => {
             const rangeDays = getRangeDays(startDate, endDate);
             const t0 = performance.now();
             if (rangeDays > 7) {
-                const data = await fetchFichajesBatched(startDate, endDate, '', '', '');
+                const data = await fetchFichajesBatched(startDate, endDate, '', startTime, endTime);
                 trackPerfMetric('fetch_fichajes_batched', performance.now() - t0, { rangeDays, rows: data.length });
                 return data;
             }
-            const data = await fetchFichajes(startDate, endDate, '', '', '');
+            const data = await fetchFichajes(startDate, endDate, '', startTime, endTime);
             trackPerfMetric('fetch_fichajes', performance.now() - t0, { rangeDays, rows: data.length });
             return data;
         },
         enabled: !!startDate && !!endDate,
         staleTime: 1000 * 60 * 5, // 5 minutos de frescura
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     return {

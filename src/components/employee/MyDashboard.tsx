@@ -42,7 +42,7 @@ const MyDashboard: React.FC<MyDashboardProps> = ({ shifts }) => {
     const myData: ProcessedDataRow | null = useMemo(() => {
         if (!auth?.user || !erpData) return null;
         // Pass the shifts array (which comes from props here, but matches DataContext) to ensure accurate calculations
-        const data = processData(erpData, [auth.user], auth.user.id);
+        const data = processData(erpData, [auth.user], Number(auth.user.id));
         return data.length > 0 ? data[0] : null;
     }, [auth?.user, erpData, shifts]);
 

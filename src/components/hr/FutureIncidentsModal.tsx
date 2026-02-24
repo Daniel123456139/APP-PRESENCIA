@@ -7,7 +7,7 @@ interface FutureIncidentsModalProps {
     onClose: () => void;
     employees: EmployeeOption[];
     motivos: { id: number; desc: string }[];
-    onSave: (data: { employeeId: number; employeeName: string; startDate: string; endDate: string; reasonId: number; reasonDesc: string }) => void;
+    onSave: (data: { employeeId: number; employeeName: string; startDate: string; endDate: string; reasonId: number; reasonDesc: string }) => Promise<void>;
 }
 
 const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onClose, employees, motivos, onSave }) => {
@@ -58,7 +58,7 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
         }
     }, [motivos, reasonId]);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
         if (!selectedEmployeeId) {
@@ -87,22 +87,26 @@ const FutureIncidentsModal: React.FC<FutureIncidentsModalProps> = ({ isOpen, onC
             return;
         }
 
-        onSave({
-            employeeId: employee.id,
-            employeeName: employee.name,
-            startDate,
-            endDate,
-            reasonId: reason.id,
-            reasonDesc: reason.desc
-        });
+        try {
+            await onSave({
+                employeeId: employee.id,
+                employeeName: employee.name,
+                startDate,
+                endDate,
+                reasonId: reason.id,
+                reasonDesc: reason.desc
+            });
 
-        // Reset form
-        setSelectedEmployeeId('');
-        setSearchTerm('');
-        setStartDate('');
-        setEndDate('');
-        setReasonId(motivos[0]?.id || 2);
-        onClose();
+            // Reset form only after confirmed save
+            setSelectedEmployeeId('');
+            setSearchTerm('');
+            setStartDate('');
+            setEndDate('');
+            setReasonId(motivos[0]?.id || 2);
+            onClose();
+        } catch {
+            // Error notification is handled by parent onSave
+        }
     };
 
     const handleClose = () => {

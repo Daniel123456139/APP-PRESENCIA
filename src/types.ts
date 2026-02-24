@@ -17,6 +17,8 @@ export interface User {
     appRole?: 'HR' | 'EMPLOYEE' | 'MANAGEMENT' | 'OPERADOR' | 'GESTOR_TRABAJOS' | 'SUPER_ADMIN';
     rolUnificado?: string;
     flexible?: boolean;
+    productivo?: boolean;
+    diasVacaciones?: number;
 }
 
 export interface BaseRecord {

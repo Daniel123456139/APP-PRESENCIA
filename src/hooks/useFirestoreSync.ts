@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, query, orderBy, Firestore } from 'firebase/firestore';
 import { getFirebaseDb } from '../firebaseConfig';
+import { resolveEmployeeCollection } from '../services/firebaseSchemaService';
 import logger from '../utils/logger';
 
 // Tipos compartidos con APP TALENTO
@@ -49,55 +50,67 @@ export const useFirestoreSync = (): FirestoreData => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        let db: Firestore;
+        let cancelled = false;
+        let unsubscribeEmpleados: (() => void) | null = null;
+        let unsubscribeSickLeaves: (() => void) | null = null;
 
-        try {
-            db = getFirebaseDb();
-        } catch (err) {
-            logger.error("Firebase initialization error:", err);
-            setError("No se pudo conectar con Firestore");
-            setLoading(false);
-            return;
-        }
+        const setup = async () => {
+            let db: Firestore;
 
-        // Listener para EMPLEADOS
-        const unsubscribeEmpleados = onSnapshot(
-            collection(db, 'EMPLEADOS'),
-            (snapshot) => {
-                const empMap = new Map<string, FirestoreEmpleado>();
-                snapshot.forEach((doc) => {
-                    empMap.set(doc.id, doc.data() as FirestoreEmpleado);
-                });
-                setEmpleados(empMap);
-                logger.success(`Sincronizados ${empMap.size} empleados desde Firestore`);
+            try {
+                db = getFirebaseDb();
+            } catch (err) {
+                logger.error("Firebase initialization error:", err);
+                setError("No se pudo conectar con Firestore");
                 setLoading(false);
-            },
-            (err) => {
-                logger.error("Firestore Error (Empleados):", err);
-                setError("Error sincronizando empleados");
-                setLoading(false);
+                return;
             }
-        );
 
-        // Listener para SICK_LEAVES
-        const unsubscribeSickLeaves = onSnapshot(
-            query(collection(db, 'SICK_LEAVES'), orderBy('createdAt', 'desc')),
-            (snapshot) => {
-                const leaves: SickLeave[] = [];
-                snapshot.forEach((doc) => {
-                    leaves.push({ id: doc.id, ...doc.data() } as SickLeave);
-                });
-                setSickLeaves(leaves);
-                logger.success(`Sincronizadas ${leaves.length} bajas médicas desde Firestore`);
-            },
-            (err) => {
-                logger.error("Firestore Error (Sick Leaves):", err);
-            }
-        );
+            const employeesCollectionName = await resolveEmployeeCollection(db);
+            if (cancelled) return;
+
+            // Listener para EMPLEADOS o EMPLEADOS_REF
+            unsubscribeEmpleados = onSnapshot(
+                collection(db, employeesCollectionName),
+                (snapshot) => {
+                    const empMap = new Map<string, FirestoreEmpleado>();
+                    snapshot.forEach((doc) => {
+                        empMap.set(doc.id, doc.data() as FirestoreEmpleado);
+                    });
+                    setEmpleados(empMap);
+                    logger.success(`Sincronizados ${empMap.size} empleados desde Firestore (${employeesCollectionName})`);
+                    setLoading(false);
+                },
+                (err) => {
+                    logger.error("Firestore Error (Empleados):", err);
+                    setError("Error sincronizando empleados");
+                    setLoading(false);
+                }
+            );
+
+            // Listener para SICK_LEAVES
+            unsubscribeSickLeaves = onSnapshot(
+                query(collection(db, 'SICK_LEAVES'), orderBy('createdAt', 'desc')),
+                (snapshot) => {
+                    const leaves: SickLeave[] = [];
+                    snapshot.forEach((doc) => {
+                        leaves.push({ id: doc.id, ...doc.data() } as SickLeave);
+                    });
+                    setSickLeaves(leaves);
+                    logger.success(`Sincronizadas ${leaves.length} bajas médicas desde Firestore`);
+                },
+                (err) => {
+                    logger.error("Firestore Error (Sick Leaves):", err);
+                }
+            );
+        };
+
+        setup();
 
         return () => {
-            unsubscribeEmpleados();
-            unsubscribeSickLeaves();
+            cancelled = true;
+            if (unsubscribeEmpleados) unsubscribeEmpleados();
+            if (unsubscribeSickLeaves) unsubscribeSickLeaves();
         };
     }, []);
 

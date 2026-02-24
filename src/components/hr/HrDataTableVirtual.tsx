@@ -3,7 +3,7 @@ import React, { memo, useState, useMemo } from 'react';
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
 import { ProcessedDataRow } from '../../types';
 import { formatPeriodoAnalisis } from '../../utils/dateFormatter';
-import { ScheduleCell, JustifiedCell } from './HrDataTable';
+import { ScheduleCell, JustifiedCell, computeDisplayJustifiedHours } from './HrDataTable';
 import { formatEmployeeId } from '../../utils/formatters';
 
 interface HrDataTableVirtualProps {
@@ -113,7 +113,7 @@ interface RowProps {
     style?: React.CSSProperties;
     onReview: (employee: ProcessedDataRow) => void;
     onManualIncident: (employee: ProcessedDataRow) => void;
-    justifiedKeys: Map<string, number>;
+    justifiedMetaByEmployee: Map<number, { count: number; motiveIds: Set<number> }>;
     isLongRange?: boolean;
     setViewingShiftChanges?: (data: { name: string, changes: any[] } | null) => void;
     flexibleEmployeeIds?: Set<number>;
@@ -121,14 +121,11 @@ interface RowProps {
     endDate?: string;
 }
 
-const Row = memo(({ row, style, onReview, onManualIncident, justifiedKeys, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, startDate, endDate }: RowProps) => {
+const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmployee, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, startDate, endDate }: RowProps) => {
     const hasPendingIncidents = row.incidentCount > 0;
-    const justifiedEntries = Array.from(justifiedKeys.entries()).filter(([k, v]) => {
-        const idStr = String(row.operario);
-        return k.startsWith(`gap-${idStr}-`) || k.startsWith(`dev-${idStr}-`);
-    });
-    const justifiedCount = justifiedEntries.length;
-    const uniqueMotiveIds = [...new Set(justifiedEntries.map(([k, v]) => v))].sort((a: any, b: any) => Number(a) - Number(b));
+    const justifiedMeta = justifiedMetaByEmployee.get(row.operario);
+    const justifiedCount = justifiedMeta?.count || 0;
+    const uniqueMotiveIds = justifiedMeta ? [...justifiedMeta.motiveIds].sort((a, b) => a - b) : [];
     const motiveIdString = uniqueMotiveIds.map(id => String(id).padStart(2, '0')).join(', ');
     const hasAbsence = row.absentDays && row.absentDays.length > 0;
     const hasMissingOut = row.missingClockOuts && row.missingClockOuts.length > 0;
@@ -221,6 +218,33 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
         });
     };
 
+    const justifiedMetaByEmployee = useMemo(() => {
+        const metaByEmployee = new Map<number, { count: number; motiveIds: Set<number> }>();
+
+        for (const [key, motive] of justifiedIncidentKeys.entries()) {
+            if (!key.startsWith('gap-') && !key.startsWith('dev-')) continue;
+            const parts = key.split('-');
+            if (parts.length < 3) continue;
+
+            const employeeId = Number(parts[1]);
+            if (!Number.isFinite(employeeId)) continue;
+
+            let meta = metaByEmployee.get(employeeId);
+            if (!meta) {
+                meta = { count: 0, motiveIds: new Set<number>() };
+                metaByEmployee.set(employeeId, meta);
+            }
+
+            meta.count += 1;
+            const numericMotive = Number(motive);
+            if (Number.isFinite(numericMotive)) {
+                meta.motiveIds.add(numericMotive);
+            }
+        }
+
+        return metaByEmployee;
+    }, [justifiedIncidentKeys]);
+
     // Calculate augmented data with incident counts for sorting
     const augmentedData = useMemo(() => {
         return data.map(row => {
@@ -229,9 +253,12 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
             const missingOuts = row.missingClockOuts?.length || 0;
             const absences = row.absentDays?.length || 0;
             const totalPending = pendingGaps + pendingDevs + missingOuts + absences;
+            const displayJustifiedHours = computeDisplayJustifiedHours(row);
 
             return {
                 ...row,
+                horasJustificadas: displayJustifiedHours,
+                horasTotalesConJustificacion: Number((row.presencia + displayJustifiedHours + (row.hTAJ || 0)).toFixed(2)),
                 incidentCount: totalPending,
                 // Add explicit sortable properties if needed
             };
@@ -274,7 +301,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
         rows: typeof sortedData;
         onReviewGaps: (employee: ProcessedDataRow) => void;
         onManualIncident: (employee: ProcessedDataRow) => void;
-        justifiedIncidentKeys: Map<string, number>;
+        justifiedMetaByEmployee: Map<number, { count: number; motiveIds: Set<number> }>;
         isLongRange?: boolean;
         setViewingShiftChanges: (data: { name: string, changes: any[] } | null) => void;
         flexibleEmployeeIds?: Set<number>;
@@ -286,7 +313,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
         rows: sortedData,
         onReviewGaps,
         onManualIncident,
-        justifiedIncidentKeys,
+        justifiedMetaByEmployee,
         isLongRange,
         setViewingShiftChanges,
         flexibleEmployeeIds,
@@ -302,7 +329,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                 style={style}
                 onReview={itemData.onReviewGaps}
                 onManualIncident={itemData.onManualIncident}
-                justifiedKeys={itemData.justifiedIncidentKeys}
+                justifiedMetaByEmployee={itemData.justifiedMetaByEmployee}
                 isLongRange={itemData.isLongRange}
                 setViewingShiftChanges={itemData.setViewingShiftChanges}
                 flexibleEmployeeIds={itemData.flexibleEmployeeIds}

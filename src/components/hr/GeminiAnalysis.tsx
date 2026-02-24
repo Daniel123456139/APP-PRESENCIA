@@ -6,8 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { SvgIcon } from '../shared/Nav';
 import { RawDataRow } from '../../types';
 import { getGeminiAnalysis } from '../../services/geminiService';
-import { useMotivos } from '../../hooks/useErp';
-
+import { useMotivos, useOperarios } from '../../hooks/useErp';
 interface GeminiAnalysisProps {
     analysisResult: string;
     setAnalysisResult: React.Dispatch<React.SetStateAction<string>>;
@@ -28,6 +27,7 @@ const GeminiAnalysis: React.FC<GeminiAnalysisProps> = ({
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const { motivos } = useMotivos();
+    const { operarios } = useOperarios();
 
     const handleRunAnalysis = async () => {
         if (!erpData || erpData.length === 0) {
@@ -39,7 +39,7 @@ const GeminiAnalysis: React.FC<GeminiAnalysisProps> = ({
         setError(null);
 
         try {
-            const result = await getGeminiAnalysis(erpData, motivos);
+            const result = await getGeminiAnalysis(erpData, motivos, operarios);
             setAnalysisResult(result);
         } catch (err: any) {
             setError(err.message || "Error al generar el análisis.");

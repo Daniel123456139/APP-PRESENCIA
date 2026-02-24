@@ -6,7 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "hosting:serve": "firebase emulators:start --only hosting",
+    "hosting:deploy": "npm run build && firebase deploy --only hosting",
+    "firebase:deploy": "npm run build && firebase deploy --only hosting,firestore:rules",
+    "firestore:auditar": "node scripts/auditar-firestore.cjs",
+    "firestore:limpiar": "node scripts/limpiar-firestore.cjs",
+    "firestore:auditar-interconexion": "node scripts/auditar-interconexion-firestore.cjs",
+    "firestore:restaurar-backup": "node scripts/restaurar-colecciones-backup.cjs",
+    "firestore:crear-subcolecciones": "node scripts/crear-subcolecciones-interapps.cjs",
+    "firestore:inicializar-colecciones": "node scripts/inicializar-colecciones-requeridas.cjs",
+    "firestore:fase2-migrar-subcolecciones": "node scripts/fase2-migrar-subcolecciones.cjs",
+    "firestore:fase2-validar-subcolecciones": "node scripts/fase2-validar-subcolecciones.cjs",
+    "firestore:verificar-integridad": "node scripts/verificar-integridad-firestore.cjs",
+    "firestore:sanar-integridad": "node scripts/sanar-integridad-firestore.cjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -34,6 +47,7 @@
     "@types/file-saver": "^2.0.7",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "firebase-admin": "^13.6.1",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

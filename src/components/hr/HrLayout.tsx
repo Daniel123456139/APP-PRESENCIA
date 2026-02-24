@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Outlet, NavLink, useLocation, useOutletContext } from 'react-router-dom';
-import { BlogPost, Shift, SickLeave, IncidentLogEntry, CompanyHoliday, ProcessedDataRow, RawDataRow, FutureAbsence, Role } from '../../types';
+import { Outlet, NavLink, useLocation, useOutletContext, Navigate } from 'react-router-dom';
+import { AuthContext } from '../../App';
+import { BlogPost, Shift, SickLeave, IncidentLogEntry, CompanyHoliday, ProcessedDataRow, RawDataRow, FutureAbsence, Role, User } from '../../types';
 import { CalendarioDia } from '../../services/erpApi';
 import { useHrPortalData } from '../../hooks/useHrPortalData';
 import { getSmartDefaultDateRange } from '../../utils/localDate';
@@ -11,17 +12,13 @@ import { exportUnproductivityToXlsx } from '../../services/exports/unproductivit
 // Icons
 import {
     LayoutDashboard,
-    Briefcase,
-    History,
-    Stethoscope,
-    BarChart3,
     Palmtree,
     CalendarDays,
-    Users,
     Newspaper,
     Settings as SettingsIcon,
     Menu,
-    X
+    X,
+    Layers
 } from 'lucide-react';
 
 interface HrLayoutProps {
@@ -57,6 +54,8 @@ export interface HrLayoutContextType {
     datasetAusencias: ProcessedDataRow[];
     employeeOptions: { id: number; name: string; role: Role; department: string; flexible: boolean }[];
     activeSickLeavesRaw: RawDataRow[];
+    missingFirebaseEmployees: Array<{ id: number; name: string; department: string; flexible: boolean }>;
+    registeringEmployeeIds: Set<number>;
     companyHolidays: CompanyHoliday[];
     companyHolidaySet: Set<string>;
 
@@ -82,8 +81,17 @@ export interface HrLayoutContextType {
     // Actions
     handleExport: (range?: { startDate: string; endDate: string }) => void;
     handleFreeHoursExport: (section: string, filterEmployeeIds: string[]) => void;
+    registerMissingEmployee: (employeeId: number) => Promise<void>;
     handleExportResumen: () => void;
     handleUnproductivityExport: () => void;
+    isPayrollExporting: boolean;
+    payrollExportProgress: {
+        percent: number;
+        message: string;
+        phase: 'validando' | 'cargando_periodo' | 'cargando_ytd' | 'procesando_empleados' | 'construyendo_excel' | 'finalizando';
+        completedEmployees?: number;
+        totalEmployees?: number;
+    };
 
     // Status
     isLoading: boolean;
@@ -96,6 +104,7 @@ export interface HrLayoutContextType {
 
     // Handlers passed down
     handleIncidentClick: (employee: ProcessedDataRow) => void;
+    handleAbsenceIncidentClick: (employee: ProcessedDataRow) => void;
     handleOpenManualIncident: (employee: ProcessedDataRow) => void;
     handleOpenLateArrivals: () => void;
     handleOpenAdjustmentModal: () => void;
@@ -137,16 +146,22 @@ const NavItem: React.FC<{
 };
 
 const HrLayout: React.FC<HrLayoutProps> = (props) => {
+    const auth = React.useContext(AuthContext);
+    const currentUser = auth?.user;
+    const rol = currentUser?.rolUnificado || 'USER';
+
     // --- UI State ---
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const location = useLocation();
+
+    // Redirección si no hay usuario
+    if (!currentUser) return <Navigate to="/login" />;
 
     // Close sidebar on route change on mobile
     useEffect(() => {
         setIsSidebarOpen(false);
     }, [location.pathname]);
 
-    // Form State (Driven by UI)
     // Form State (Driven by UI)
     const defaultDates = getSmartDefaultDateRange();
 
@@ -163,6 +178,8 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         datasetAusencias,
         employeeOptions,
         activeSickLeavesRaw,
+        missingFirebaseEmployees,
+        registeringEmployeeIds,
         companyCalendarDays,
         selectedEmployeeData,
         isLoading,
@@ -175,6 +192,9 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         setSelectedEmployeeIds,
         handleExport,
         handleFreeHoursExport,
+        isPayrollExporting,
+        payrollExportProgress,
+        registerMissingEmployee,
         isLongRange,
         computedDepartments,
         employeeCalendarsByDate,
@@ -182,7 +202,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         isFetchingCalendars,
         lastUpdated,
         refetchActiveSickLeaves
-    } = useHrPortalData({ startDate, endDate });
+    } = useHrPortalData({ startDate, endDate, startTime, endTime });
 
     const incidentManagerRef = useRef<IncidentManagerHandle>(null);
 
@@ -204,6 +224,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
 
     // --- Handlers ---
     const handleIncidentClick = (employee: ProcessedDataRow) => incidentManagerRef.current?.handleIncidentClick(employee);
+    const handleAbsenceIncidentClick = (employee: ProcessedDataRow) => incidentManagerRef.current?.handleAbsenceIncidentClick(employee);
     const handleOpenManualIncident = (employee: ProcessedDataRow) => incidentManagerRef.current?.handleOpenManualIncident(employee);
     const handleOpenLateArrivals = () => incidentManagerRef.current?.handleOpenLateArrivals(datasetResumen);
     const handleOpenAdjustmentModal = () => {
@@ -285,6 +306,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
 
         erpData, processedData, datasetResumen, datasetAusencias, employeeOptions,
         activeSickLeavesRaw, companyHolidays: props.companyHolidays, companyHolidaySet, selectedEmployeeData,
+        missingFirebaseEmployees, registeringEmployeeIds,
         employeeCalendarsByDate, setEmployeeCalendarsByDate,
 
         selectedDepartment, setSelectedDepartment,
@@ -295,6 +317,9 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         shouldUseVirtualization,
 
         handleExport, handleFreeHoursExport,
+        isPayrollExporting,
+        payrollExportProgress,
+        registerMissingEmployee,
         handleExportResumen, handleUnproductivityExport,
 
         isLoading,
@@ -306,6 +331,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         lastUpdated,
 
         handleIncidentClick,
+        handleAbsenceIncidentClick,
         handleOpenManualIncident,
         handleOpenLateArrivals,
         handleOpenAdjustmentModal,
@@ -320,27 +346,42 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         fetchActiveSickLeaves: () => { refetchActiveSickLeaves(); }
     };
 
+    const menuItems = [
+        { to: "/portal/dashboard", label: "Gestión de Fichajes", icon: <LayoutDashboard size={20} />, roles: ['SUPER_ADMIN', 'RRHH', 'OPERADOR'] },
+
+        { to: "/portal/vacations", label: "Gestión de Vacaciones", icon: <Palmtree size={20} />, roles: ['SUPER_ADMIN', 'RRHH', 'OPERADOR'] },
+        { to: "/portal/calendar", label: "Calendario", icon: <CalendarDays size={20} />, roles: ['SUPER_ADMIN', 'RRHH', 'OPERADOR', 'GESTOR_TRABAJOS'] },
+        { to: "/portal/blog", label: "Blog", icon: <Newspaper size={20} />, roles: ['SUPER_ADMIN', 'RRHH', 'OPERADOR', 'GESTOR_TRABAJOS'] },
+    ].filter(item => item.roles.includes(rol));
+
     return (
         <div className="flex min-h-screen bg-slate-50">
             <aside className={`fixed inset-y-0 left-0 w-64 bg-white border-r border-slate-200 transition-transform duration-300 z-30 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
-                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
-                    <div>
-                        <h1 className="text-2xl font-bold text-slate-800">RRHH Portal</h1>
-                        <p className="text-xs text-slate-500">Gestión Integral</p>
+                <div className="p-6 border-b border-slate-200">
+                    <h1 className="text-2xl font-bold text-slate-800">RRHH Portal</h1>
+                    <div className="flex items-center mt-1">
+                        <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
+                        <p className="text-xs text-slate-500 font-medium">{currentUser?.name}</p>
                     </div>
+                    <p className="text-[10px] text-blue-600 font-bold uppercase mt-0.5">{rol.replace('_', ' ')}</p>
                 </div>
-                <nav className="p-4 space-y-1 overflow-y-auto max-h-[calc(100vh-100px)]">
-                    <NavItem to="/portal/dashboard" label="Gestión de Fichajes" icon={<LayoutDashboard size={20} />} />
-                    <NavItem to="/portal/jobs" label="Gestión de Trabajos" icon={<Briefcase size={20} />} />
-                    <NavItem to="/portal/history" label="Historial Incidencias" icon={<History size={20} />} />
+                <nav className="p-4 space-y-1 overflow-y-auto max-h-[calc(100vh-140px)]">
+                    {menuItems.map(item => (
+                        <NavItem key={item.to} to={item.to} label={item.label} icon={item.icon} />
+                    ))}
 
-                    <NavItem to="/portal/vacations" label="Gestión de Vacaciones" icon={<Palmtree size={20} />} />
-                    <NavItem to="/portal/calendar" label="Calendario" icon={<CalendarDays size={20} />} />
-                    <NavItem to="/portal/blog" label="Blog" icon={<Newspaper size={20} />} />
-                    <NavItem to="/portal/settings" label="Configuración" icon={<SettingsIcon size={20} />} />
+                    {['SUPER_ADMIN'].includes(rol) && (
+                        <NavItem to="/portal/settings" label="Configuración" icon={<SettingsIcon size={20} />} />
+                    )}
 
-                    <div className="mt-8 px-4">
-                        {/* Status indicators should be moved to components if needed, or keeping it empty for now if no easy sync status available yet */}
+                    <div className="mt-8 pt-4 border-t border-slate-100">
+                        <button
+                            onClick={() => auth?.logout()}
+                            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                            <X size={20} />
+                            <span className="font-medium">Cerrar Sesión</span>
+                        </button>
                     </div>
                 </nav>
             </aside>
@@ -355,6 +396,36 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
 
                 <Outlet context={contextValue} />
             </main>
+
+            {isPayrollExporting && (
+                <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white shadow-2xl p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-bold text-slate-800">Exportando nomina mensual</h3>
+                            <span className="text-sm font-semibold text-slate-500">{Math.max(0, Math.min(100, payrollExportProgress.percent))}%</span>
+                        </div>
+
+                        <div className="mb-3 text-sm text-slate-600">{payrollExportProgress.message}</div>
+
+                        <div className="h-4 w-full rounded-full bg-slate-200 overflow-hidden relative">
+                            <div
+                                className="h-full rounded-full bg-gradient-to-r from-slate-800 via-slate-600 to-slate-400 transition-all duration-500 ease-out"
+                                style={{ width: `${Math.max(0, Math.min(100, payrollExportProgress.percent))}%` }}
+                            />
+                            <div className="absolute inset-0 opacity-30 bg-[linear-gradient(110deg,transparent,rgba(255,255,255,0.65),transparent)] animate-pulse" />
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
+                            <span className="uppercase tracking-wide">Fase: {payrollExportProgress.phase.replace('_', ' ')}</span>
+                            {typeof payrollExportProgress.totalEmployees === 'number' && (
+                                <span>
+                                    Empleados: {payrollExportProgress.completedEmployees || 0}/{payrollExportProgress.totalEmployees}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* UI Modals managed by IncidentManager */}
             <IncidentManager

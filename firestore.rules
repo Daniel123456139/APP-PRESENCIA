@@ -32,17 +32,21 @@ service cloud.firestore {
     /**
      * Verificar si el usuario tiene un rol específico
      */
+    function userRole() {
+      return request.auth.token.rol != null
+        ? request.auth.token.rol
+        : request.auth.token.role;
+    }
+
     function hasRole(role) {
-      return isAuthenticated() && 
-             request.auth.token.role == role;
+      return isAuthenticated() && userRole() == role;
     }
     
     /**
      * Verificar si el usuario tiene al menos uno de los roles especificados
      */
     function hasAnyRole(roles) {
-      return isAuthenticated() && 
-             request.auth.token.role in roles;
+      return isAuthenticated() && userRole() in roles;
     }
     
     /**
@@ -59,20 +63,36 @@ service cloud.firestore {
              !('telefono' in data) &&
              !('email_personal' in data);
     }
+
+    function isSuperAdmin() {
+      return hasRole('SUPER_ADMIN');
+    }
+
+    function isHrRole() {
+      return hasAnyRole(['SUPER_ADMIN', 'RRHH']);
+    }
+
+    function canUsePortal() {
+      return hasAnyRole(['SUPER_ADMIN', 'RRHH', 'OPERADOR', 'GESTOR_TRABAJOS']);
+    }
+
+    function canReadTalento() {
+      return hasAnyRole(['SUPER_ADMIN', 'RRHH', 'GESTOR_TRABAJOS']);
+    }
     
     // ═══════════════════════════════════════════════════════════════
     // COLECCIÓN: EMPLEADOS_REF (Datos compartidos con APP - TALENTO)
     // ═══════════════════════════════════════════════════════════════
     
     match /EMPLEADOS_REF/{employeeId} {
-      // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      // Lectura: roles de portal
+      allow read: if canUsePortal();
       
-      // Escritura: Solo Admin, con validación anti-PII
-      allow create, update: if hasRole('admin') && noPII();
+      // Escritura: RRHH y SUPER_ADMIN, con validación anti-PII
+      allow create, update: if isHrRole() && noPII();
       
-      // Eliminación: Solo Admin
-      allow delete: if hasRole('admin');
+      // Eliminación: Solo SUPER_ADMIN
+      allow delete: if isSuperAdmin();
     }
     
     // ═══════════════════════════════════════════════════════════════
@@ -80,14 +100,83 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /EMPLEADOS/{employeeId} {
-      // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      // Lectura: roles de portal
+      allow read: if canUsePortal();
       
-      // Escritura: Solo Admin, con validación anti-PII
-      allow create, update: if hasRole('admin') && noPII();
+      // Escritura: RRHH y SUPER_ADMIN, con validación anti-PII
+      allow create, update: if isHrRole() && noPII();
       
-      // Eliminación: Solo Admin
-      allow delete: if hasRole('admin');
+      // Eliminación: Solo SUPER_ADMIN
+      allow delete: if isSuperAdmin();
+
+      // Subcolecciones de interconexion entre apps
+      match /talento_competencias/{docId} {
+        allow read: if canReadTalento();
+        allow write: if isHrRole();
+      }
+
+      match /talento_notas/{docId} {
+        allow read: if canReadTalento();
+        allow write: if isHrRole();
+      }
+
+      match /talento_certificaciones/{docId} {
+        allow read: if canReadTalento();
+        allow write: if isHrRole();
+      }
+
+      match /talento_formaciones/{docId} {
+        allow read: if canReadTalento();
+        allow write: if isHrRole();
+      }
+
+      match /talento_historial_evaluaciones/{docId} {
+        allow read: if canReadTalento();
+        allow write: if isHrRole();
+      }
+
+      match /presencia_bajas_activas/{docId} {
+        allow read: if canUsePortal();
+        allow write: if isHrRole();
+      }
+
+      match /presencia_bajas_historico/{docId} {
+        allow read: if canUsePortal();
+        allow write: if isHrRole();
+      }
+
+      match /presencia_incidencias/{docId} {
+        allow read: if canUsePortal();
+        allow write: if isHrRole();
+      }
+
+      match /presencia_fichajes_app/{docId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated();
+      }
+
+      match /trabajos_partes/{docId} {
+        allow read: if canUsePortal();
+        allow write: if hasAnyRole(['SUPER_ADMIN', 'RRHH', 'GESTOR_TRABAJOS', 'OPERADOR']);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: USUARIOS (autenticación + roles unificados)
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /USUARIOS/{uid} {
+      allow read: if isAuthenticated() && (request.auth.uid == uid || isHrRole());
+      allow create, update, delete: if isSuperAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: CONFIGURACION
+    // ═══════════════════════════════════════════════════════════════
+    
+    match /CONFIGURACION/{docId} {
+      allow read: if canUsePortal();
+      allow write: if isSuperAdmin();
     }
     
     // ═══════════════════════════════════════════════════════════════
@@ -96,10 +185,10 @@ service cloud.firestore {
     
     match /COMPETENCIAS/{competenciaId} {
       // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      allow read: if isHrRole();
       
-      // Escritura: Solo Admin
-      allow write: if hasRole('admin');
+      // Escritura: Solo SUPER_ADMIN
+      allow write: if isSuperAdmin();
     }
     
     // ═══════════════════════════════════════════════════════════════
@@ -108,14 +197,14 @@ service cloud.firestore {
     
     match /NOTAS/{notaId} {
       // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      allow read: if isHrRole();
       
-      // Creación: HR y Admin pueden crear notas
-      allow create: if hasAnyRole(['hr', 'admin']) &&
+      // Creación: RRHH y SUPER_ADMIN pueden crear notas
+      allow create: if isHrRole() &&
                        request.resource.data.autor == request.auth.token.email;
       
-      // Actualización/Eliminación: Solo el autor o Admin
-      allow update, delete: if hasRole('admin') || 
+      // Actualización/Eliminación: Solo el autor o SUPER_ADMIN
+      allow update, delete: if isSuperAdmin() || 
                                (isAuthenticated() && resource.data.autor == request.auth.token.email);
     }
     
@@ -125,10 +214,10 @@ service cloud.firestore {
     
     match /EMPLOYEE_AUDIT_LOG/{logId} {
       // Lectura: Solo Admin
-      allow read: if hasRole('admin');
+      allow read: if isSuperAdmin();
       
-      // Escritura: Solo Admin y Sistema
-      allow create: if hasAnyRole(['admin', 'system']);
+      // Escritura: Solo SUPER_ADMIN y sistema
+      allow create: if hasAnyRole(['SUPER_ADMIN', 'system']);
       
       // NO permitir actualización ni eliminación (logs inmutables)
       allow update, delete: if false;
@@ -140,7 +229,7 @@ service cloud.firestore {
     
     match /EMPLOYEE_ACCESS_LOG/{accessId} {
       // Lectura: Solo Admin
-      allow read: if hasRole('admin');
+      allow read: if isSuperAdmin();
       
       // Creación: Cualquier usuario autenticado puede registrar su acceso
       allow create: if isAuthenticated() &&
@@ -156,10 +245,10 @@ service cloud.firestore {
     
     match /SICK_LEAVES/{leaveId} {
       // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      allow read: if isHrRole();
       
-      // Escritura: Solo HR y Admin
-      allow write: if hasAnyRole(['hr', 'admin']);
+      // Escritura: Solo RRHH y SUPER_ADMIN
+      allow write: if isHrRole();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -168,10 +257,10 @@ service cloud.firestore {
     
     match /BAJAS/{bajaId} {
       // Lectura: HR y Admin (DEBUG: Relaxed to isAuthenticated for troubleshooting)
-      allow read: if isAuthenticated(); // hasAnyRole(['hr', 'admin']);
+      allow read: if isAuthenticated();
       
-      // Escritura: Solo HR y Admin (para mover de activa a historico)
-      allow write: if hasAnyRole(['hr', 'admin']);
+      // Escritura: Solo RRHH y SUPER_ADMIN (para mover de activa a historico)
+      allow write: if isHrRole();
     }
     
     // ═══════════════════════════════════════════════════════════════
@@ -180,10 +269,10 @@ service cloud.firestore {
     
     match /INCIDENT_LOG/{incidentId} {
       // Lectura: HR y Admin
-      allow read: if hasAnyRole(['hr', 'admin']);
+      allow read: if isHrRole();
       
-      // Creación: HR y Admin
-      allow create: if hasAnyRole(['hr', 'admin']);
+      // Creación: RRHH y SUPER_ADMIN
+      allow create: if isHrRole();
       
       // NO permitir actualización ni eliminación (logs inmutables)
       allow update, delete: if false;
@@ -195,10 +284,10 @@ service cloud.firestore {
     
     match /BAJAS_METADATA/{metadataId} {
       // Lectura: Cualquier usuario autenticado (incluyendo anónimos)
-      allow read: if isAuthenticated(); // hasAnyRole(['hr', 'admin']);
+      allow read: if isAuthenticated();
       
-      // Escritura: Solo HR y Admin
-      allow write: if hasAnyRole(['hr', 'admin']);
+      // Escritura: Solo RRHH y SUPER_ADMIN
+      allow write: if isHrRole();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -208,6 +297,51 @@ service cloud.firestore {
     match /APP_GENERATED_PUNCHES/{punchId} {
       // Lectura y Escritura: Cualquier usuario autenticado (incluyendo anónimos)
       allow read, write: if isAuthenticated();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIONES TALENTO (compatibilidad actual)
+    // ═══════════════════════════════════════════════════════════════
+
+    match /SKILLS/{skillId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
+    }
+
+    match /COMPETENCY_DEFINITIONS/{definitionId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
+    }
+
+    match /CERTIFICACIONES/{certId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
+    }
+
+    match /HISTORIAL_EVALUACIONES/{historyId} {
+      allow read: if canReadTalento();
+      allow create: if isHrRole();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    match /FORMACIONES/{trainingId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
+    }
+
+    match /PLANES_FORMATIVOS_ANUALES/{planId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
+    }
+
+    match /FORMACION_JUSTIFICACIONES/{justificationId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
+    }
+
+    match /HOMOLOGACIONES_TECNICAS/{itemId} {
+      allow read: if canReadTalento();
+      allow write: if isHrRole();
     }
     
     // ═══════════════════════════════════════════════════════════════

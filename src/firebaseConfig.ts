@@ -1,7 +1,6 @@
 
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getFirestore, initializeFirestore, persistentLocalCache, Firestore } from 'firebase/firestore';
-import { getAnalytics, Analytics } from 'firebase/analytics';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import logger from './utils/logger';
 
@@ -13,8 +12,7 @@ const firebaseConfig = {
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 // Validación de Configuración Crítica
@@ -29,7 +27,6 @@ if (missingVars.length > 0) {
 
 let app: FirebaseApp | undefined;
 let db: Firestore | undefined;
-let analytics: Analytics | undefined;
 let storage: FirebaseStorage | undefined;
 
 export const getFirebaseApp = (): FirebaseApp => {
@@ -60,14 +57,6 @@ export const getFirebaseDb = (): Firestore => {
     }
   }
   return db;
-};
-
-export const getFirebaseAnalytics = (): Analytics => {
-  if (!analytics) {
-    const appInstance = getFirebaseApp();
-    analytics = getAnalytics(appInstance);
-  }
-  return analytics;
 };
 
 export const getFirebaseStorage = (): FirebaseStorage => {

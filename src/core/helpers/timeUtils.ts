@@ -38,14 +38,19 @@ export const clearDateCache = () => {
  * Detecta si un registro es ENTRADA (soporta boolean true o number 1)
  */
 export const isEntrada = (entrada: boolean | number | string): boolean => {
-    return entrada === true || entrada === 1 || entrada === '1';
+    if (entrada === true || entrada === 1 || entrada === -1 || entrada === '1' || entrada === '-1') return true;
+    if (typeof entrada === 'string') {
+        const normalized = entrada.trim().toLowerCase();
+        return normalized === 'true' || normalized === 'si' || normalized === 'sí' || normalized === 's' || normalized === 'x';
+    }
+    return false;
 };
 
 /**
  * Detecta si un registro es SALIDA
  */
 export const isSalida = (entrada: boolean | number | string): boolean => {
-    return entrada === false || entrada === 0 || entrada === '0';
+    return !isEntrada(entrada);
 };
 
 /**

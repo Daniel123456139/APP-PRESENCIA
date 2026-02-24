@@ -116,7 +116,7 @@ export const updateCalendarioOperario = async (
 
 export const getCalendarioEmpresa = async (fechaDesde: string, fechaHasta: string): Promise<CalendarioDia[]> => {
     const baseUrl = getApiBaseUrl();
-    const url = new URL(`${baseUrl}/fichajes/getCalendarioEmpresa`);
+    const url = buildEndpointUrl(baseUrl, '/fichajes/getCalendarioEmpresa');
 
     // Convert YYYY-MM-DD to DD/MM/YYYY for ERP
     const formatDateForApi = (dateStr: string): string => {
@@ -178,9 +178,20 @@ export const getOperarios = async (activo: boolean = true): Promise<Operario[]> 
         IDDepartamento: typeof op.IDDepartamento === 'string' ? parseInt(op.IDDepartamento, 10) : op.IDDepartamento,
         DescDepartamento: op.DescDepartamento,
         Activo: op.Activo === true || op.Activo === 1 || op.Activo === 'true',
-        Productivo: !([false, 0, '0', 'false', 'FALSE', 'False'].includes(op.Productivo ?? op.productivo)),
+        Productivo: op.Productivo === true || op.Productivo === 1 || op.Productivo === 'true' || op.productivo === true,
         Flexible: op.Flexible === true || op.Flexible === 1 || op.Flexible === 'true' || op.flexible === true
     }));
+};
+
+const buildEndpointUrl = (baseUrl: string, path: string): URL => {
+    const target = `${baseUrl}${path}`;
+
+    if (/^https?:\/\//i.test(target)) {
+        return new URL(target);
+    }
+
+    const fallbackOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    return new URL(target, fallbackOrigin);
 };
 
 export const getCalendarioOperario = async (idOperario: string, fechaDesde: string, fechaHasta: string): Promise<CalendarioDia[]> => {
@@ -189,7 +200,7 @@ export const getCalendarioOperario = async (idOperario: string, fechaDesde: stri
     if (!cleanId) throw new Error("ID de operario inválido.");
 
     const baseUrl = getApiBaseUrl();
-    const url = new URL(`${baseUrl}/fichajes/getCalendarioOperario`);
+    const url = buildEndpointUrl(baseUrl, '/fichajes/getCalendarioOperario');
 
     const formatDateForApi = (dateStr: string): string => {
         if (dateStr.includes('-')) {
@@ -218,7 +229,7 @@ export const getCalendarioOperario = async (idOperario: string, fechaDesde: stri
 
     return rawData.map((d: any) => ({
         Fecha: d.Fecha.split(' ')[0],
-        TipoDia: String(d.TipoDia) as "0" | "1",
+        TipoDia: String(d.TipoDia) as "0" | "1" | "2",
         DescTipoDia: d.DescTipoDia || '',
         IDTipoTurno: (!d.IDTipoTurno || d.IDTipoTurno === 'None' || d.IDTipoTurno === '') ? null : d.IDTipoTurno,
         DescTurno: d.DescTurno || '',
@@ -233,7 +244,7 @@ export const getCalendarioOperario = async (idOperario: string, fechaDesde: stri
  */
 export const getControlOfProduccion = async (idOrden: string): Promise<any[]> => {
     const baseUrl = getApiBaseUrl();
-    const url = new URL(`${baseUrl}/fichajes/getControlOfProduccion`);
+    const url = buildEndpointUrl(baseUrl, '/fichajes/getControlOfProduccion');
 
     // Parametro CORRECTO según OpenAPI: 'n_orden'
     url.searchParams.append('n_orden', idOrden);
@@ -263,7 +274,7 @@ export const getControlOfPorOperario = async (
     timeoutMs: number = 10000
 ): Promise<any[]> => {
     const baseUrl = getApiBaseUrl();
-    const url = new URL(`${baseUrl}/fichajes/getControlOfPorOperario`);
+    const url = buildEndpointUrl(baseUrl, '/fichajes/getControlOfPorOperario');
 
     // Formatear ID a 3 dígitos (Ej: 56 -> 056)
     const idFormateado = idOperario.padStart(3, '0');

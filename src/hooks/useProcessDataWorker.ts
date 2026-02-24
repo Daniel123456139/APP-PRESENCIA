@@ -24,10 +24,8 @@ export function useProcessDataWorker(
     const [status, setStatus] = useState<'idle' | 'processing' | 'error' | 'success'>('idle');
     const [error, setError] = useState<string | null>(null);
     const workerRef = useRef<Worker | null>(null);
-    const prevDataLengthRef = useRef<number>(0);
     const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const processingTokenRef = useRef<number>(0);
-    const WORKER_TIMEOUT_MS = 15000;
 
     // Safety Refs
     const runSafeCounterRef = useRef<number>(0);
@@ -44,10 +42,19 @@ export function useProcessDataWorker(
         return `${analysisRange.start?.getTime()}-${analysisRange.end?.getTime()}`;
     }, [analysisRange?.start?.getTime(), analysisRange?.end?.getTime()]);
 
-    // Deep compare employeeCalendars
-    const calendarsJson = useMemo(() => {
-        return employeeCalendars ? JSON.stringify(employeeCalendars) : '';
-    }, [employeeCalendars]);
+    const workerTimeoutMs = useMemo(() => {
+        const base = 15000;
+        const byRows = Math.min(60000, Math.floor(rawData.length * 8));
+        let byRange = 0;
+
+        if (analysisRange) {
+            const dayMs = 24 * 60 * 60 * 1000;
+            const rangeDays = Math.max(1, Math.floor((analysisRange.end.getTime() - analysisRange.start.getTime()) / dayMs) + 1);
+            byRange = Math.min(30000, rangeDays * 200);
+        }
+
+        return Math.min(120000, base + byRows + byRange);
+    }, [rawData.length, analysisRange?.start?.getTime(), analysisRange?.end?.getTime()]);
 
     useEffect(() => {
         // Si no hay datos, limpiamos
@@ -181,7 +188,7 @@ export function useProcessDataWorker(
                     console.warn("Worker timeout, falling back to main thread.");
                     cleanupWorker(true);
                     runSynchronousFallback();
-                }, WORKER_TIMEOUT_MS);
+                }, workerTimeoutMs);
 
                 worker.postMessage({
                     rawData,
@@ -232,7 +239,7 @@ export function useProcessDataWorker(
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
         };
 
-    }, [rawData, allUsers, analysisRangeKey, holidaysArray, dataVersion, calendarsKey, usersKey, calendarsJson]);
+    }, [rawData, allUsers, analysisRangeKey, holidaysArray, dataVersion, calendarsKey, usersKey, workerTimeoutMs]);
 
     useEffect(() => {
         return () => {

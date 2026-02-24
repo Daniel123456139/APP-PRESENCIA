@@ -1,11 +1,15 @@
 import React, { useMemo } from 'react';
 import { RawDataRow } from '../../types';
 import { normalizeDateKey } from '../../utils/datetime';
+import { CalendarioDia } from '../../services/erpApi';
 
 interface VacationsTableProps {
     erpData: RawDataRow[];
     startDate: string; // YYYY-MM-DD
     endDate: string;   // YYYY-MM-DD
+    employeeCalendarsByDate: Map<number, Map<string, CalendarioDia>>;
+    employeeOptions: Array<{ id: number; name: string; department: string }>;
+    excludedEmployeeIds?: Set<number>;
 }
 
 interface VacationEntry {
@@ -15,29 +19,58 @@ interface VacationEntry {
     vacationDates: string[]; // All dates with TipoDiaEmpresa === 2 in range
 }
 
-const VacationsTable: React.FC<VacationsTableProps> = ({ erpData, startDate, endDate }) => {
+const VacationsTable: React.FC<VacationsTableProps> = ({
+    erpData,
+    startDate,
+    endDate,
+    employeeCalendarsByDate,
+    employeeOptions,
+    excludedEmployeeIds
+}) => {
     const vacations = useMemo(() => {
-        // Group by employee, filter those who have TipoDiaEmpresa === 2 in the selected range
+        // Group by employee and merge vacations from both sources:
+        // 1) Personal calendar (TipoDia = 2)
+        // 2) ERP punches fallback (TipoDiaEmpresa = 2)
         const employeeMap = new Map<number, VacationEntry>();
+        const employeeMeta = new Map<number, { name: string; department: string }>();
 
-        erpData.forEach(row => {
-            // Only consider rows in the date range
-            const dateKey = normalizeDateKey(row.Fecha);
-            if (!dateKey || dateKey < startDate || dateKey > endDate) return;
+        employeeOptions.forEach(emp => {
+            employeeMeta.set(emp.id, { name: emp.name, department: emp.department || '' });
+        });
 
-            // Only consider vacation days (TipoDiaEmpresa === 2)
-            if (row.TipoDiaEmpresa !== 2) return;
-
-            if (!employeeMap.has(row.IDOperario)) {
-                employeeMap.set(row.IDOperario, {
-                    employeeId: row.IDOperario,
-                    employeeName: row.DescOperario,
-                    department: row.DescDepartamento || '',
+        const ensureEntry = (employeeId: number, fallbackName = 'Desconocido', fallbackDept = '') => {
+            if (!employeeMap.has(employeeId)) {
+                const meta = employeeMeta.get(employeeId);
+                employeeMap.set(employeeId, {
+                    employeeId,
+                    employeeName: meta?.name || fallbackName,
+                    department: meta?.department || fallbackDept,
                     vacationDates: []
                 });
             }
 
-            const entry = employeeMap.get(row.IDOperario)!;
+            return employeeMap.get(employeeId)!;
+        };
+
+        employeeCalendarsByDate.forEach((dateMap, employeeId) => {
+            dateMap.forEach((day, rawDate) => {
+                const dateKey = normalizeDateKey(rawDate || day.Fecha);
+                if (!dateKey || dateKey < startDate || dateKey > endDate) return;
+                if (String(day.TipoDia) !== '2') return;
+
+                const entry = ensureEntry(employeeId);
+                if (!entry.vacationDates.includes(dateKey)) {
+                    entry.vacationDates.push(dateKey);
+                }
+            });
+        });
+
+        erpData.forEach(row => {
+            const dateKey = normalizeDateKey(row.Fecha);
+            if (!dateKey || dateKey < startDate || dateKey > endDate) return;
+            if (Number(row.TipoDiaEmpresa) !== 2) return;
+
+            const entry = ensureEntry(row.IDOperario, row.DescOperario, row.DescDepartamento || '');
             if (!entry.vacationDates.includes(dateKey)) {
                 entry.vacationDates.push(dateKey);
             }
@@ -45,6 +78,7 @@ const VacationsTable: React.FC<VacationsTableProps> = ({ erpData, startDate, end
 
         // Convert to array and sort
         const result = Array.from(employeeMap.values())
+            .filter(entry => !excludedEmployeeIds?.has(entry.employeeId))
             .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
 
         // Sort vacation dates for each employee
@@ -53,7 +87,7 @@ const VacationsTable: React.FC<VacationsTableProps> = ({ erpData, startDate, end
         });
 
         return result;
-    }, [erpData, startDate, endDate]);
+    }, [erpData, startDate, endDate, employeeCalendarsByDate, employeeOptions, excludedEmployeeIds]);
 
     const formatDateRange = (dates: string[]): string => {
         if (dates.length === 0) return '';

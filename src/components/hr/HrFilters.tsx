@@ -2,6 +2,7 @@ import React from 'react';
 import AdvancedEmployeeFilter from '../shared/AdvancedEmployeeFilter';
 import SmartDateInput from '../shared/SmartDateInput';
 import { Role } from '../../types';
+import { toISODateLocal } from '../../utils/localDate';
 
 export interface EmployeeOption {
     id: number;
@@ -60,8 +61,8 @@ const HrFilters: React.FC<HrFiltersProps> = ({
             end = new Date(now.getFullYear(), 11, 31);
         }
 
-        const s = start.toISOString().split('T')[0];
-        const e = end.toISOString().split('T')[0];
+        const s = toISODateLocal(start);
+        const e = toISODateLocal(end);
 
         setStartDate(s);
         setEndDate(e);
@@ -74,7 +75,7 @@ const HrFilters: React.FC<HrFiltersProps> = ({
             target = new Date(now);
             target.setDate(now.getDate() - 1);
         }
-        const iso = target.toISOString().split('T')[0];
+        const iso = toISODateLocal(target);
         setStartDate(iso);
         setEndDate(iso);
     };

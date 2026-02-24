@@ -22,7 +22,7 @@ interface AdjustmentCandidate {
 // Convert HH:MM to minutes for easier comparison
 const toMinutes = (h: number, m: number) => h * 60 + m;
 
-const TARGET_RANGES = [
+const TYPE1_TARGET_RANGES = [
     {
         // 07:00 Start: [06:30, 07:30] -> 07:00 (Ampliado por petición usuario)
         type: 'Entrada',
@@ -45,6 +45,35 @@ const TARGET_RANGES = [
         maxMinutes: toMinutes(13, 30)
     }
 ];
+
+const SATURDAY_TARGET_RANGES = [
+    {
+        // Sabado: ajustar solo llegadas tempranas (nunca retrasos)
+        type: 'Entrada',
+        targetHour: 7, targetMinute: 0,
+        minMinutes: toMinutes(6, 30),
+        maxMinutes: toMinutes(6, 59)
+    },
+    {
+        // Sabado: salida entre 12:00 y 12:30 se redondea a 12:00
+        type: 'Salida',
+        targetHour: 12, targetMinute: 0,
+        minMinutes: toMinutes(12, 0),
+        maxMinutes: toMinutes(12, 30)
+    },
+    {
+        // Sabado: salida despues de las 13:00 se ajusta a 13:00 (sin regalar minutos)
+        type: 'Salida',
+        targetHour: 13, targetMinute: 0,
+        minMinutes: toMinutes(13, 1),
+        maxMinutes: toMinutes(13, 30)
+    }
+];
+
+const isSaturday = (dateStr: string): boolean => {
+    const d = new Date(`${dateStr}T00:00:00`);
+    return d.getDay() === 6;
+};
 
 const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpen, onClose, data, onApply, employeeShifts, flexibleEmployeeIds }) => {
     const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
@@ -69,7 +98,8 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
 
             // --- 1. HOLIDAY LOGIC (Existing) ---
             if (row.TipoDiaEmpresa === 1) {
-                for (const range of TARGET_RANGES) {
+                const ranges = isSaturday(row.Fecha) ? SATURDAY_TARGET_RANGES : TYPE1_TARGET_RANGES;
+                for (const range of ranges) {
                     if ((isEntry && range.type !== 'Entrada') || (isExit && range.type !== 'Salida')) continue;
                     if (rowTimeMinutes >= range.minMinutes && rowTimeMinutes <= range.maxMinutes) {
                         const targetMinutes = toMinutes(range.targetHour, range.targetMinute);

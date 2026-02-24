@@ -80,7 +80,7 @@ const HrChatbot: React.FC<HrChatbotProps> = ({ processedData, allEmployees }) =>
 
         const newRow: RawDataRow = {
             DescDepartamento: String(employee.role),
-            IDOperario: employee.id,
+            IDOperario: Number(employee.id),
             DescOperario: employee.name,
             Fecha: fecha,
             Hora: hora_inicio || '00:00:00',

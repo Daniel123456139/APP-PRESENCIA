@@ -32,7 +32,7 @@ const Chatbot: React.FC = () => {
     useEffect(() => {
         if (auth?.user && erpData.length > 0) {
             // Pass shifts to ensure chatbot sees the correct calculated data
-            const processed = processData(erpData, [auth.user], auth.user.id);
+            const processed = processData(erpData, [auth.user], Number(auth.user.id));
             setEmployeeData(processed.length > 0 ? processed[0] : null);
         }
         if (messages.length === 0) {

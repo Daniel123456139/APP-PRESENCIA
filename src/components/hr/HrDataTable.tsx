@@ -33,6 +33,33 @@ const parseStartMinutes = (schedule: string): number | null => {
     return null;
 };
 
+export const computeDisplayJustifiedHours = (row: ProcessedDataRow): number => {
+    const base = Number(row.horasJustificadas || 0);
+    if (base > 0) return base;
+
+    const intervals = row.justifiedIntervals || [];
+    if (intervals.length === 0) return 0;
+
+    const toMinutes = (hhmm: string): number => {
+        const [h, m] = (hhmm || '00:00').split(':').map(Number);
+        return (h || 0) * 60 + (m || 0);
+    };
+
+    const inferred = intervals.reduce((acc, interval) => {
+        const motivoId = Number(interval.motivoId || 0);
+        const motivoDesc = (interval.motivoDesc || '').toUpperCase();
+        if (motivoId === 14 || motivoDesc.includes('TAJ')) return acc;
+
+        const start = toMinutes(interval.start || '00:00');
+        let end = toMinutes(interval.end || '00:00');
+        if (interval.endIsNextDay || end < start) end += 1440;
+        const hours = Math.max(0, (end - start) / 60);
+        return acc + hours;
+    }, 0);
+
+    return Number(inferred.toFixed(2));
+};
+
 const turnoRank = (turno: string): number => {
     if (turno === 'M') return 1;
     if (turno === 'TN' || turno === 'T') return 2;
@@ -42,6 +69,11 @@ const turnoRank = (turno: string): number => {
 
 type SortDirection = 'ascending' | 'descending';
 type SortableKeys = keyof ProcessedDataRow | 'displaySchedule' | 'incidentCount' | 'estadoText';
+
+type JustifiedEmployeeMeta = {
+    count: number;
+    motiveIds: Set<number>;
+};
 
 const sortValues = (a: any, b: any, direction: SortDirection, isNumeric: boolean = false) => {
     const isEmptyA = a === null || a === undefined || a === '' || a === '-';
@@ -353,9 +385,15 @@ const SummaryView: React.FC<{
                 estadoText = 'Ausencia';
             }
 
+            const displayJustifiedHours = computeDisplayJustifiedHours(row);
+            const displayTotal = Number((row.presencia + displayJustifiedHours + (row.hTAJ || 0)).toFixed(2));
+
             return {
                 ...row,
+                formattedOperario: formatEmployeeId(row.operario),
                 displaySchedule: row.horarioReal || '-',
+                horasJustificadas: displayJustifiedHours,
+                horasTotalesConJustificacion: displayTotal,
                 incidentCount: totalPending,
                 estadoText: estadoText // Helper for sorting status column
             };
@@ -393,12 +431,39 @@ const SummaryView: React.FC<{
             return items.filter(row =>
                 row.nombre.toLowerCase().includes(lowerTerm) ||
                 String(row.operario).includes(lowerTerm) ||
-                formatEmployeeId(row.operario).includes(lowerTerm)
+                row.formattedOperario.includes(lowerTerm)
             );
         }
 
         return items;
     }, [augmentedData, searchTerm, sortConfig]);
+
+    const justifiedMetaByEmployee = useMemo(() => {
+        const metaByEmployee = new Map<number, JustifiedEmployeeMeta>();
+
+        for (const [key, motive] of justifiedIncidentKeys.entries()) {
+            if (!key.startsWith('gap-') && !key.startsWith('dev-')) continue;
+            const parts = key.split('-');
+            if (parts.length < 3) continue;
+
+            const employeeId = Number(parts[1]);
+            if (!Number.isFinite(employeeId)) continue;
+
+            let meta = metaByEmployee.get(employeeId);
+            if (!meta) {
+                meta = { count: 0, motiveIds: new Set<number>() };
+                metaByEmployee.set(employeeId, meta);
+            }
+
+            meta.count += 1;
+            const numericMotive = Number(motive);
+            if (Number.isFinite(numericMotive)) {
+                meta.motiveIds.add(numericMotive);
+            }
+        }
+
+        return metaByEmployee;
+    }, [justifiedIncidentKeys]);
 
     return (
         <div className="bg-white/90 p-5 sm:p-6 rounded-2xl shadow-lg border border-slate-200/70">
@@ -460,12 +525,9 @@ const SummaryView: React.FC<{
                     </thead>
                     <tbody className="overflow-visible">
                         {sortedAndFilteredData.map(row => {
-                            const justifiedEntries = Array.from(justifiedIncidentKeys.entries()).filter(([k, v]) => {
-                                const idStr = String(row.operario);
-                                return k.startsWith(`gap-${idStr}-`) || k.startsWith(`dev-${idStr}-`);
-                            });
-                            const justifiedCount = justifiedEntries.length;
-                            const uniqueMotiveIds = [...new Set(justifiedEntries.map(([k, v]) => v))].sort((a: any, b: any) => Number(a) - Number(b));
+                            const justifiedMeta = justifiedMetaByEmployee.get(row.operario);
+                            const justifiedCount = justifiedMeta?.count || 0;
+                            const uniqueMotiveIds = justifiedMeta ? [...justifiedMeta.motiveIds].sort((a, b) => a - b) : [];
                             const motiveIdString = uniqueMotiveIds.map(id => String(id).padStart(2, '0')).join(', ');
                             const hasAbsence = false; // row.absentDays && row.absentDays.length > 0;
                             const hasMissingOut = row.missingClockOuts && row.missingClockOuts.length > 0;
@@ -479,7 +541,7 @@ const SummaryView: React.FC<{
 
                             return (
                                 <tr key={row.operario} className={`${rowClass} border-b border-slate-200 transition-colors`}>
-                                    <td className="px-4 py-4 font-mono font-medium text-slate-900">{formatEmployeeId(row.operario)}</td>
+                                    <td className="px-4 py-4 font-mono font-medium text-slate-900">{row.formattedOperario}</td>
                                     <td className="px-4 py-4 font-medium text-slate-800 relative group/name">
                                         <div className="flex items-center gap-1">
                                             <span>{row.nombre}</span>

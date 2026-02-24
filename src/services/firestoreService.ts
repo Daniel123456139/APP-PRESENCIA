@@ -13,6 +13,7 @@ import {
 import { getFirebaseDb } from '../firebaseConfig';
 import { SickLeave } from '../hooks/useFirestoreSync';
 import logger from '../utils/logger';
+import { resolveEmployeeCollection } from './firebaseSchemaService';
 
 const getDb = () => getFirebaseDb();
 
@@ -151,7 +152,8 @@ export async function updateEmployeeTurno(
 ): Promise<void> {
     try {
         const db = getDb();
-        const docRef = doc(db, 'EMPLEADOS', employeeId);
+        const employeeCollectionName = await resolveEmployeeCollection(db);
+        const docRef = doc(db, employeeCollectionName, employeeId);
         await updateDoc(docRef, {
             TurnoHabitual: turno,
             updatedAt: serverTimestamp(),
@@ -170,7 +172,8 @@ export async function updateEmployeeTurno(
 export async function updateEmployeeLastPunch(employeeId: string): Promise<void> {
     try {
         const db = getDb();
-        const docRef = doc(db, 'EMPLEADOS', employeeId);
+        const employeeCollectionName = await resolveEmployeeCollection(db);
+        const docRef = doc(db, employeeCollectionName, employeeId);
         await updateDoc(docRef, {
             UltimoFichaje: new Date().toISOString(),
             updatedAt: serverTimestamp(),
