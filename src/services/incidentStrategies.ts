@@ -33,7 +33,10 @@ const addDaysToDate = (dateStr: string, days: number): string => {
     const base = new Date(`${dateStr}T00:00:00`);
     if (Number.isNaN(base.getTime())) return dateStr;
     base.setDate(base.getDate() + days);
-    return base.toISOString().split('T')[0];
+    const year = base.getFullYear();
+    const month = String(base.getMonth() + 1).padStart(2, '0');
+    const day = String(base.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
 };
 
 export interface IncidentStrategyResult {
@@ -108,7 +111,7 @@ export const generateGapStrategy = (
             DescMotivoAusencia: reason.desc,
             Computable: 'No',
             Inicio: shift.start, // Referencia visual
-            Fin: gapEnd,        // Referencia visual
+            Fin: exitTime,
             GeneradoPorApp: true
         };
 
@@ -143,7 +146,7 @@ export const generateGapStrategy = (
             MotivoAusencia: reason.id,
             DescMotivoAusencia: reason.desc,
             Computable: 'No',
-            Inicio: gapStart,
+            Inicio: entryTime,
             Fin: shift.end,
             GeneradoPorApp: true
         };
@@ -178,8 +181,8 @@ export const generateGapStrategy = (
         MotivoAusencia: reason.id, // Aquí va la incidencia (ej. Médico)
         DescMotivoAusencia: reason.desc,
         Computable: 'No' as any,
-        Inicio: gapStart, // Ref original
-        Fin: gapEnd,      // Ref original
+        Inicio: entryTime,
+        Fin: exitTime,
         GeneradoPorApp: true
     };
 

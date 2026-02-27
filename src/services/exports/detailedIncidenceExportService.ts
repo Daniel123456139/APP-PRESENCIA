@@ -4,7 +4,10 @@ import { ANNUAL_CREDITS } from '../../constants';
 import { toISODateLocal } from '../../utils/localDate';
 import type { Operario } from '../erpApi';
 import ExcelJS from 'exceljs';
-import { saveAs } from 'file-saver';
+import * as FileSaver from 'file-saver';
+
+const saveAs: (data: Blob, filename: string) => void =
+    ((FileSaver as any).saveAs || (FileSaver as any).default || FileSaver) as any;
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -137,8 +140,13 @@ export interface PayrollExportProgress {
 
 // Helper para convertir HH:MM a minutos desde medianoche
 const getMinutes = (timeStr: string): number => {
-    const [h, m] = timeStr.split(':').map(Number);
-    return h * 60 + m;
+    if (!timeStr || typeof timeStr !== 'string') return 0;
+    const parts = timeStr.split(':');
+    if (parts.length < 2) return 0;
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+    return (h * 60) + m;
 };
 
 const normalizeDateStr = (raw: string): string => {
@@ -233,6 +241,80 @@ const resolveShiftFromRows = (rows: RawDataRow[], fallback: 'M' | 'TN'): 'M' | '
     }
 
     return fallback;
+};
+
+const normalizeShiftToken = (raw: unknown): 'M' | 'TN' | null => {
+    if (raw === null || raw === undefined) return null;
+    const token = String(raw).toUpperCase().trim();
+    if (!token) return null;
+
+    if (
+        token === 'TN' ||
+        token === 'T' ||
+        token === 'N' ||
+        token.includes('TN') ||
+        token.includes('TARDE') ||
+        token.includes('NOCHE')
+    ) {
+        return 'TN';
+    }
+
+    if (token === 'M' || token.includes('MANANA') || token.includes('MAÑANA')) {
+        return 'M';
+    }
+
+    return null;
+};
+
+const getRowShiftCode = (row: RawDataRow): 'M' | 'TN' | null => {
+    return normalizeShiftToken(row.IDTipoTurno) || normalizeShiftToken(row.TurnoTexto);
+};
+
+const buildDailyShiftMap = (rows: RawDataRow[], fallback: 'M' | 'TN'): Map<string, 'M' | 'TN'> => {
+    const byDate = new Map<string, RawDataRow[]>();
+    rows.forEach(row => {
+        const dateKey = normalizeDateStr(row.Fecha);
+        const current = byDate.get(dateKey) || [];
+        current.push(row);
+        byDate.set(dateKey, current);
+    });
+
+    const out = new Map<string, 'M' | 'TN'>();
+
+    byDate.forEach((dateRows, dateKey) => {
+        let turnoM = 0;
+        let turnoTN = 0;
+
+        dateRows.forEach(row => {
+            const rowShift = getRowShiftCode(row);
+            if (rowShift === 'M') turnoM += 1;
+            else if (rowShift === 'TN') turnoTN += 1;
+        });
+
+        if (turnoTN > turnoM) {
+            out.set(dateKey, 'TN');
+            return;
+        }
+        if (turnoM > turnoTN) {
+            out.set(dateKey, 'M');
+            return;
+        }
+
+        const entries = dateRows
+            .filter(r => isEntrada(r.Entrada) && isNormalWorkMotivo(r.MotivoAusencia))
+            .map(r => getMinutes(normalizeTimeStr(r.Hora || '')))
+            .filter(m => Number.isFinite(m));
+
+        if (entries.length > 0) {
+            const firstEntry = Math.min(...entries);
+            out.set(dateKey, firstEntry >= 12 * 60 ? 'TN' : 'M');
+            return;
+        }
+
+        out.set(dateKey, fallback);
+    });
+
+    return out;
 };
 
 interface TimeInterval {
@@ -367,6 +449,17 @@ const hasExplicitRange = (row: RawDataRow): boolean => {
     return ini !== '00:00' && fin !== '00:00';
 };
 
+const normalizeRowsForUser = (rows: RawDataRow[], user: User): RawDataRow[] => {
+    if (user.flexible !== true) return rows;
+
+    return rows.map(row => {
+        const realHora = normalizeTimeStr(String((row as any).HoraReal || ''));
+        if (realHora === '00:00') return row;
+
+        return { ...row, Hora: `${realHora}:00` };
+    });
+};
+
 const sortRowsByDateTime = (rows: RawDataRow[]): RawDataRow[] => {
     return [...rows].sort((a, b) => {
         const ad = normalizeDateStr(a.Fecha);
@@ -398,13 +491,39 @@ const buildWorkedIntervals = (rows: RawDataRow[]): TimeInterval[] => {
         intervals.push({ startDate: dateStr, endDate, startMin, endMin });
     });
 
-    const rowsForPairing = sorted.filter(r => !hasExplicitRange(r));
+    const rowsForPairing = sorted;
     let i = 0;
     while (i < rowsForPairing.length - 1) {
         const current = rowsForPairing[i];
         const next = rowsForPairing[i + 1];
 
-        if (!isEntrada(current.Entrada) || !isSalida(next.Entrada) || (!isNormalWorkMotivo(next.MotivoAusencia) && toMotivoNumber(next.MotivoAusencia) !== 14)) {
+        // Caso especial: Entrada normal seguida de salida con incidencia con rango explícito.
+        // La parte trabajada previa a Inicio también es tiempo real y debe contarse.
+        if (!hasExplicitRange(current) && isEntrada(current.Entrada) && isSalida(next.Entrada) && !isNormalWorkMotivo(next.MotivoAusencia) && hasExplicitRange(next)) {
+            const startDate = normalizeDateStr(current.Fecha);
+            const rangeDate = normalizeDateStr(next.Fecha) || startDate;
+            const startMin = getMinutes(normalizeTimeStr(current.Hora || ''));
+            const rangeStartMin = getMinutes(normalizeTimeStr(next.Inicio || ''));
+
+            if (rangeDate === startDate) {
+                if (rangeStartMin > startMin) {
+                    intervals.push({ startDate, endDate: rangeDate, startMin, endMin: rangeStartMin });
+                }
+            } else {
+                intervals.push({ startDate, endDate: rangeDate, startMin, endMin: rangeStartMin });
+            }
+
+            i += 1;
+            continue;
+        }
+
+        if (
+            hasExplicitRange(current) ||
+            hasExplicitRange(next) ||
+            !isEntrada(current.Entrada) ||
+            !isSalida(next.Entrada) ||
+            (!isNormalWorkMotivo(next.MotivoAusencia) && toMotivoNumber(next.MotivoAusencia) !== 14)
+        ) {
             i++;
             continue;
         }
@@ -478,26 +597,55 @@ const buildTAJIntervals = (rows: RawDataRow[]): TimeInterval[] => {
     const sorted = sortRowsByDateTime(rows);
     const intervals: TimeInterval[] = [];
 
+    const pushSafeInterval = (startDateRaw: string, startMin: number, endDateRaw: string, endMin: number) => {
+        const startDate = normalizeDateStr(startDateRaw);
+        let endDate = normalizeDateStr(endDateRaw) || startDate;
+        if (endDate === startDate && endMin < startMin) {
+            endDate = addDaysStr(startDate, 1);
+        }
+
+        const diffDays = (new Date(`${endDate}T00:00:00`).getTime() - new Date(`${startDate}T00:00:00`).getTime()) / (1000 * 3600 * 24);
+        if (diffDays < 0 || diffDays > 1) return;
+
+        const durationMinutes = endDate === startDate
+            ? (endMin >= startMin ? endMin - startMin : (1440 - startMin + endMin))
+            : (1440 - startMin + endMin);
+
+        if (durationMinutes <= 0) return;
+        intervals.push({ startDate, endDate, startMin, endMin });
+    };
+
+    // 1) TAJ con rango explicito (Inicio/Fin)
+    sorted.forEach(row => {
+        if (toMotivoNumber(row.MotivoAusencia) !== 14) return;
+        if (!hasExplicitRange(row)) return;
+
+        const dateStr = normalizeDateStr(row.Fecha);
+        const startMin = getMinutes(normalizeTimeStr(row.Inicio || ''));
+        const endMin = getMinutes(normalizeTimeStr(row.Fin || ''));
+        pushSafeInterval(dateStr, startMin, dateStr, endMin);
+    });
+
     const rowsForPairing = sorted.filter(r => !hasExplicitRange(r));
     let i = 0;
-    while (i < rowsForPairing.length - 1) {
+    while (i < rowsForPairing.length) {
         const current = rowsForPairing[i];
+        const next = i + 1 < rowsForPairing.length ? rowsForPairing[i + 1] : null;
+        const prev = i - 1 >= 0 ? rowsForPairing[i - 1] : null;
 
         if (isSalida(current.Entrada) && toMotivoNumber(current.MotivoAusencia) === 14) {
-            const next = rowsForPairing[i + 1];
-            if (isEntrada(next.Entrada)) {
-                const startDate = normalizeDateStr(current.Fecha);
-                const endDateRaw = normalizeDateStr(next.Fecha) || startDate;
+            // Patrón principal TAJ: Salida(14) -> Entrada retorno
+            if (next && isEntrada(next.Entrada)) {
                 const startMin = getMinutes(normalizeTimeStr(current.Hora || ''));
                 const endMin = getMinutes(normalizeTimeStr(next.Hora || ''));
-                let endDate = endDateRaw;
-                if (endDate === startDate && endMin < startMin) {
-                    endDate = addDaysStr(startDate, 1);
-                }
-                const diffDays = (new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 3600 * 24);
-                if (diffDays <= 1 && diffDays >= 0) {
-                    intervals.push({ startDate, endDate, startMin, endMin });
-                }
+                pushSafeInterval(current.Fecha, startMin, next.Fecha, endMin);
+            }
+            // Fallback solicitado: Entrada(null) -> Salida(14) sin retorno posterior
+            // Solo cuando el par parece sintético de la app (evita capturar jornadas reales).
+            else if (prev && isEntrada(prev.Entrada) && (prev.GeneradoPorApp === true || current.GeneradoPorApp === true)) {
+                const startMin = getMinutes(normalizeTimeStr(prev.Hora || ''));
+                const endMin = getMinutes(normalizeTimeStr(current.Hora || ''));
+                pushSafeInterval(prev.Fecha, startMin, current.Fecha, endMin);
             }
         }
         i++;
@@ -521,7 +669,15 @@ interface TimeBuckets {
     festivas: number;       // Fines de semana / Festivos
 }
 
-const round2 = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+const round2 = (value: number): number => {
+    if (!Number.isFinite(value)) return 0;
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
+const toFiniteNumber = (value: unknown, fallback: number = 0): number => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+};
 
 const roundRow = (row: DetailedIncidenceRow): DetailedIncidenceRow => ({
     ...row,
@@ -557,6 +713,94 @@ const roundRow = (row: DetailedIncidenceRow): DetailedIncidenceRow => ({
     numRetrasos: round2(row.numRetrasos),
     tiempoRetrasos: round2(row.tiempoRetrasos)
 });
+
+const buildSafeFallbackRow = (user: User, employeeId: number): DetailedIncidenceRow => {
+    const vacationCredit = user.diasVacaciones ?? ANNUAL_CREDITS.VACATION_DAYS;
+    return roundRow({
+        colectivo: user.department || 'General',
+        operario: `FV${String(employeeId).padStart(3, '0')}`,
+        nombre: user.name || `Empleado ${employeeId}`,
+        jF: Boolean(user.flexible),
+        rJ: false,
+        totalHoras: 0,
+        productivo: user.productivo ?? true,
+        horasDia: 0,
+        excesoJornada1: 0,
+        horasTarde: 0,
+        nocturnas: 0,
+        horasNoche: 0,
+        festivas: 0,
+        hMedico: 0,
+        acumMedico: 0,
+        dispMedico: ANNUAL_CREDITS.MEDICO_HOURS,
+        hVacaciones: 0,
+        acumVacaciones: 0,
+        dispVacaciones: vacationCredit,
+        hLDisp: 0,
+        acumHLDisp: 0,
+        dispHLDisp: ANNUAL_CREDITS.LIBRE_DISPOSICION_HOURS,
+        hLeyFam: 0,
+        acumHLF: 0,
+        dispHLF: ANNUAL_CREDITS.LEY_FAMILIAS_HOURS,
+        asOficiales: 0,
+        espYAc: 0,
+        hSind: 0,
+        hVacAnt: 0,
+        diasITAT: 0,
+        hITAT: 0,
+        diasITEC: 0,
+        hITEC: 0,
+        numTAJ: 0,
+        hTAJ: 0,
+        numRetrasos: 0,
+        tiempoRetrasos: 0
+    });
+};
+
+const sanitizeDetailedRow = (row: DetailedIncidenceRow): DetailedIncidenceRow => {
+    const vacationCredit = toFiniteNumber(row.dispVacaciones + row.acumVacaciones, ANNUAL_CREDITS.VACATION_DAYS);
+
+    return roundRow({
+        ...row,
+        colectivo: row.colectivo || 'General',
+        operario: row.operario || 'FV000',
+        nombre: row.nombre || 'SIN NOMBRE',
+        jF: Boolean(row.jF),
+        rJ: Boolean(row.rJ),
+        productivo: row.productivo !== false,
+        totalHoras: toFiniteNumber(row.totalHoras),
+        horasDia: toFiniteNumber(row.horasDia),
+        excesoJornada1: toFiniteNumber(row.excesoJornada1),
+        horasTarde: toFiniteNumber(row.horasTarde),
+        nocturnas: toFiniteNumber(row.nocturnas),
+        horasNoche: toFiniteNumber(row.horasNoche),
+        festivas: toFiniteNumber(row.festivas),
+        hMedico: toFiniteNumber(row.hMedico),
+        acumMedico: toFiniteNumber(row.acumMedico),
+        dispMedico: toFiniteNumber(row.dispMedico, ANNUAL_CREDITS.MEDICO_HOURS),
+        hVacaciones: toFiniteNumber(row.hVacaciones),
+        acumVacaciones: toFiniteNumber(row.acumVacaciones),
+        dispVacaciones: toFiniteNumber(row.dispVacaciones, vacationCredit),
+        hLDisp: toFiniteNumber(row.hLDisp),
+        acumHLDisp: toFiniteNumber(row.acumHLDisp),
+        dispHLDisp: toFiniteNumber(row.dispHLDisp, ANNUAL_CREDITS.LIBRE_DISPOSICION_HOURS),
+        hLeyFam: toFiniteNumber(row.hLeyFam),
+        acumHLF: toFiniteNumber(row.acumHLF),
+        dispHLF: toFiniteNumber(row.dispHLF, ANNUAL_CREDITS.LEY_FAMILIAS_HOURS),
+        asOficiales: toFiniteNumber(row.asOficiales),
+        espYAc: toFiniteNumber(row.espYAc),
+        hSind: toFiniteNumber(row.hSind),
+        hVacAnt: toFiniteNumber(row.hVacAnt),
+        diasITAT: toFiniteNumber(row.diasITAT),
+        hITAT: toFiniteNumber(row.hITAT),
+        diasITEC: toFiniteNumber(row.diasITEC),
+        hITEC: toFiniteNumber(row.hITEC),
+        numTAJ: toFiniteNumber(row.numTAJ),
+        hTAJ: toFiniteNumber(row.hTAJ),
+        numRetrasos: toFiniteNumber(row.numRetrasos),
+        tiempoRetrasos: toFiniteNumber(row.tiempoRetrasos)
+    });
+};
 
 const getFestiveDatesFromCalendar = (calendar: any[]): Set<string> => {
     const festiveDates = new Set<string>();
@@ -607,7 +851,7 @@ const hasReducedWorkingDay = (calendar: any[]): boolean => {
  *
  *    Turno TN (Tarde/Noche):
  *       - Horas Tarde: 15:00 - 23:00
- *       - Nocturnas: desde 23:00 en adelante (hasta 07:00 del dia siguiente)
+ *       - Nocturnas: 20:00 - 07:00
  *       - Horas Dia: 07:00 - 15:00 (mantenido para compatibilidad histórica)
  *
  *    Horas Noche:
@@ -675,8 +919,6 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
     const R_15_23 = { s: 15 * 60, e: 23 * 60 };  // 900 - 1380
     const R_20_07_A = { s: 20 * 60, e: 24 * 60 }; // 1200 - 1440 (Nocturnas M parte 1)
     const R_20_07_B = { s: 0, e: 7 * 60 };        // 0 - 420 (Nocturnas M parte 2)
-    const R_23_07_A = { s: 23 * 60, e: 24 * 60 }; // 1380 - 1440 (Nocturnas TN parte 1)
-    const R_23_07_B = { s: 0, e: 7 * 60 };        // 0 - 420 (Nocturnas TN parte 2)
 
     // Función intersección
     const intersect = (s1: number, e1: number, s2: number, e2: number) => {
@@ -693,8 +935,8 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
     } else {
         b.horasDia += intersect(start, end, R_07_15.s, R_07_15.e);
         b.horasTarde += intersect(start, end, R_15_23.s, R_15_23.e);
-        b.nocturnas += intersect(start, end, R_23_07_A.s, R_23_07_A.e);
-        b.nocturnas += intersect(start, end, R_23_07_B.s, R_23_07_B.e);
+        b.nocturnas += intersect(start, end, R_20_07_A.s, R_20_07_A.e);
+        b.nocturnas += intersect(start, end, R_20_07_B.s, R_20_07_B.e);
         // Horas Noche queda en 0 por decisión funcional actual (sin turno N activo)
     }
 
@@ -706,21 +948,40 @@ const addIntervalToBuckets = (
     interval: TimeInterval,
     shift: 'M' | 'TN',
     festiveDates: Set<string>,
-    vacationDates: Set<string>
+    _vacationDates: Set<string>
 ): TimeBuckets => {
+    const isFridayTurnoTardeCarryOver = (dateStr: string, startMin: number): boolean => {
+        // Regla de negocio: continuidad del turno TN del viernes en madrugada del sabado
+        // (00:00-05:59) debe ir a nocturnas, no a festivas.
+        if (shift !== 'TN') return false;
+        if (startMin >= 6 * 60) return false;
+        const d = new Date(`${dateStr}T00:00:00`);
+        if (!Number.isFinite(d.getTime())) return false;
+        return d.getDay() === 6; // Sabado
+    };
+
     const isFestiveDate = (dateStr: string): boolean =>
-        festiveDates.has(dateStr) || isWeekend(dateStr) || vacationDates.has(dateStr);
+        festiveDates.has(dateStr) || isWeekend(dateStr);
 
     if (interval.startDate === interval.endDate) {
-        const isFestive = isFestiveDate(interval.startDate);
+        const isFestive = isFridayTurnoTardeCarryOver(interval.startDate, interval.startMin)
+            ? false
+            : isFestiveDate(interval.startDate);
         const added = resolveBucket(interval.startMin, interval.endMin, shift, isFestive);
         return sumBuckets(base, added);
     }
 
     const firstDate = interval.startDate;
     const secondDate = interval.endDate;
-    const firstPart = resolveBucket(interval.startMin, 1440, shift, isFestiveDate(firstDate));
-    const secondPart = resolveBucket(0, interval.endMin, shift, isFestiveDate(secondDate));
+    const firstPartFestive = isFridayTurnoTardeCarryOver(firstDate, interval.startMin)
+        ? false
+        : isFestiveDate(firstDate);
+    const secondPartFestive = isFridayTurnoTardeCarryOver(secondDate, 0)
+        ? false
+        : isFestiveDate(secondDate);
+
+    const firstPart = resolveBucket(interval.startMin, 1440, shift, firstPartFestive);
+    const secondPart = resolveBucket(0, interval.endMin, shift, secondPartFestive);
     return sumBuckets(base, sumBuckets(firstPart, secondPart));
 };
 
@@ -758,6 +1019,7 @@ interface EmployeeAnalysisContext {
     empRawPeriod: RawDataRow[];
     empRawYTD: RawDataRow[];
     workRows: RawDataRow[];
+    dailyShiftMap: Map<string, 'M' | 'TN'>;
     userShift: 'M' | 'TN';
     colectivo: string;
     festiveDates: Set<string>;
@@ -802,8 +1064,14 @@ const buildEmployeeAnalysisContext = (
         ? ytdCutoffDate.substring(0, 10)
         : periodEnd;
 
-    const empRawPeriod = allRawDataPeriod.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId);
-    const empRawYTD = allRawDataYTD.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId);
+    const empRawPeriod = normalizeRowsForUser(
+        allRawDataPeriod.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId),
+        user
+    );
+    const empRawYTD = normalizeRowsForUser(
+        allRawDataYTD.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId),
+        user
+    );
     const fallbackShift: 'M' | 'TN' = pData?.turnoAsignado === 'TN' ? 'TN' : 'M';
     const userShift = resolveShiftFromRows(empRawYTD.length > 0 ? empRawYTD : empRawPeriod, fallbackShift);
     const colectivo = resolveDepartment(
@@ -823,6 +1091,7 @@ const buildEmployeeAnalysisContext = (
         const d = normalizeDateStr(r.Fecha);
         return d >= periodStart && d <= periodEnd;
     });
+    const dailyShiftMap = buildDailyShiftMap(workRows, userShift);
 
     const vacationDaysPeriodFromCalendar = sumVacationDaysFromCalendar(periodCalendar, periodStart, periodEnd);
     const vacationDaysYtdFromCalendar = sumVacationDaysFromCalendar(annualCalendar, ytdStart, ytdEnd);
@@ -838,6 +1107,7 @@ const buildEmployeeAnalysisContext = (
         empRawPeriod,
         empRawYTD,
         workRows,
+        dailyShiftMap,
         userShift,
         colectivo,
         festiveDates: effectiveFestiveDates,
@@ -861,7 +1131,8 @@ const validateEmployeeRowDoubleReview = (ctx: EmployeeAnalysisContext, row: Deta
     const workIntervals = buildWorkedIntervals(ctx.workRows);
     let b: TimeBuckets = { horasDia: 0, excesoJornada1: 0, horasTarde: 0, nocturnas: 0, horasNoche: 0, festivas: 0 };
     workIntervals.forEach(interval => {
-        b = addIntervalToBuckets(b, interval, ctx.userShift, ctx.festiveDates, ctx.vacationDates);
+        const shiftForDate = ctx.dailyShiftMap.get(interval.startDate) || ctx.userShift;
+        b = addIntervalToBuckets(b, interval, shiftForDate, ctx.festiveDates, ctx.vacationDates);
     });
     const tajIntervals = buildTAJIntervals(ctx.workRows);
     // El TAJ ya no se resta aquí de los buckets de trabajo, porque 'buildWorkedIntervals' 
@@ -984,6 +1255,7 @@ export const buildDetailedIncidenceRowsWithCalendar = async (
     console.log(`📊 Total empleados: ${allUsers.length}`);
 
     const rows: DetailedIncidenceRow[] = [];
+    const processingWarnings: string[] = [];
     const processedMap = new Map<number, ProcessedDataRow>();
     processedData.forEach(p => processedMap.set(p.operario, p));
 
@@ -997,8 +1269,29 @@ export const buildDetailedIncidenceRowsWithCalendar = async (
 
     const calendars: any[][] = [];
     const annualCalendars: any[][] = [];
+    const calendarWarnings: string[] = [];
 
     const BATCH_SIZE = 3;
+
+    const fetchCalendarWithRetry = async (
+        employeeId: string,
+        from: string,
+        to: string,
+        attempts: number = 3
+    ): Promise<any[] | null> => {
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                const data = await getCalendarioOperario(employeeId, from, to);
+                return Array.isArray(data) ? data : [];
+            } catch {
+                if (attempt === attempts) {
+                    return null;
+                }
+                await new Promise(resolve => setTimeout(resolve, 400 * attempt));
+            }
+        }
+        return null;
+    };
 
     for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
         const batch = allUsers.slice(i, i + BATCH_SIZE);
@@ -1011,23 +1304,27 @@ export const buildDetailedIncidenceRowsWithCalendar = async (
             totalEmployees: allUsers.length
         });
 
-        // Lanzar bloque
-        const periodBatchPromises = batch.map(user =>
-            getCalendarioOperario(user.id.toString(), filterStartDate, filterEndDate).catch(err => {
-                throw new Error(`Fallo al obtener calendario de periodo para el empleado ${user.id} (${user.name}): ${err.message}`);
-            })
-        );
-        const annualBatchPromises = batch.map(user =>
-            getCalendarioOperario(user.id.toString(), annualStart, annualEnd).catch(err => {
-                throw new Error(`Fallo al obtener calendario anual para el empleado ${user.id} (${user.name}): ${err.message}`);
-            })
-        );
+        const batchResults = await Promise.all(batch.map(async user => {
+            const periodCal = await fetchCalendarWithRetry(user.id.toString(), filterStartDate, filterEndDate);
+            const annualCal = await fetchCalendarWithRetry(user.id.toString(), annualStart, annualEnd);
 
-        const periodBatchResults = await Promise.all(periodBatchPromises);
-        const annualBatchResults = await Promise.all(annualBatchPromises);
+            if (periodCal === null) {
+                calendarWarnings.push(`Periodo sin calendario para ${user.id} (${user.name})`);
+            }
+            if (annualCal === null) {
+                calendarWarnings.push(`YTD sin calendario para ${user.id} (${user.name})`);
+            }
 
-        calendars.push(...periodBatchResults);
-        annualCalendars.push(...annualBatchResults);
+            return {
+                periodCal: periodCal || [],
+                annualCal: annualCal || []
+            };
+        }));
+
+        batchResults.forEach(result => {
+            calendars.push(result.periodCal);
+            annualCalendars.push(result.annualCal);
+        });
 
         // Pequeña pausa de estabilización si quedan más lotes
         if (i + BATCH_SIZE < allUsers.length) {
@@ -1035,6 +1332,10 @@ export const buildDetailedIncidenceRowsWithCalendar = async (
         }
     }
 
+    if (calendarWarnings.length > 0) {
+        console.warn(`⚠️ Calendarios no disponibles para ${calendarWarnings.length} consulta(s). Se aplica fallback por fichajes.`);
+        calendarWarnings.slice(0, 8).forEach(w => console.warn(`   - ${w}`));
+    }
     console.log('✅ Calendarios consultados correctamente');
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1108,13 +1409,50 @@ export const buildDetailedIncidenceRowsWithCalendar = async (
                 totalEmployees: allUsers.length
             });
 
-            validateEmployeeRowDoubleReview(ctx, row);
+            try {
+                validateEmployeeRowDoubleReview(ctx, row);
+            } catch (validationError: any) {
+                const msg = `Doble revision no bloqueante para ${user.name} (${userId}): ${validationError?.message || 'Sin detalle'}`;
+                processingWarnings.push(msg);
+                console.warn(`⚠️ ${msg}`);
+            }
 
-            rows.push(row);
+            rows.push(sanitizeDetailedRow(row));
 
         } catch (error: any) {
-            console.error(`❌ Error procesando empleado ${userId} (${user.name}):`, error.message);
-            throw new Error(`Revision de nomina fallida para ${user.name} (${userId}). ${error?.message || 'Error desconocido'}`);
+            const baseMsg = `Error procesando ${userId} (${user.name}): ${error?.message || 'Error desconocido'}`;
+            processingWarnings.push(baseMsg);
+            console.error(`❌ ${baseMsg}`);
+
+            try {
+                const fallbackFestiveDates = getFestiveDatesFromCalendar(calendar || []);
+                const fallbackVacationDates = getVacationDatesFromCalendar(calendar || []);
+                const fallbackReduced = hasReducedWorkingDay(calendar || []);
+
+                const fallbackRow = calculateEmployeeRowLegacy(
+                    userId,
+                    allRawDataPeriod,
+                    allRawDataYTD,
+                    pData,
+                    user,
+                    filterStartDate,
+                    filterEndDate,
+                    fallbackFestiveDates,
+                    fallbackVacationDates,
+                    annualCutoffDate,
+                    fallbackReduced
+                );
+
+                rows.push(sanitizeDetailedRow(fallbackRow));
+                const fallbackMsg = `Fallback legacy aplicado para ${user.name} (${userId}).`;
+                processingWarnings.push(fallbackMsg);
+                console.warn(`⚠️ ${fallbackMsg}`);
+            } catch (fallbackError: any) {
+                const hardFallbackMsg = `Fallback minimo aplicado para ${user.name} (${userId}): ${fallbackError?.message || 'Sin detalle'}`;
+                processingWarnings.push(hardFallbackMsg);
+                console.error(`❌ ${hardFallbackMsg}`);
+                rows.push(buildSafeFallbackRow(user, userId));
+            }
         }
 
         onProgress?.({
@@ -1124,6 +1462,11 @@ export const buildDetailedIncidenceRowsWithCalendar = async (
             completedEmployees: i + 1,
             totalEmployees: allUsers.length
         });
+    }
+
+    if (processingWarnings.length > 0) {
+        console.warn(`⚠️ Exportacion completada con ${processingWarnings.length} advertencia(s).`);
+        processingWarnings.slice(0, 12).forEach(w => console.warn(`   - ${w}`));
     }
 
     console.log(`✅ [Excel Nóminas] ${rows.length} empleados procesados`);
@@ -1154,7 +1497,7 @@ const calculateEmployeeRowWithCalendar = (
     const vacationDates = getVacationDatesFromCalendar(periodCalendar);
     const reducedWorkingDay = hasReducedWorkingDay(periodCalendar);
 
-    const legacyRow = calculateEmployeeRowLegacy(
+    return calculateEmployeeRowLegacy(
         employeeId,
         allRawDataPeriod,
         allRawDataYTD,
@@ -1167,42 +1510,6 @@ const calculateEmployeeRowWithCalendar = (
         annualCutoffDate,
         reducedWorkingDay
     );
-
-    const vacationCredit = user.diasVacaciones ?? ANNUAL_CREDITS.VACATION_DAYS;
-
-    // El periodo de vacaciones se cuenta desde el día 1 del mes de periodEnd (o periodStart si es mismo mes)
-    const monthStart = `${periodEnd.substring(0, 7)}-01`;
-    const vacationPeriodDays = sumVacationDaysFromCalendar(periodCalendar, monthStart, periodEnd);
-
-    // El acumulado anual (YTD) es siempre desde el 1 de enero
-    const annualStart = `${periodEnd.substring(0, 4)}-01-01`;
-    const vacationYtdDays = sumVacationDaysFromCalendar(annualCalendar, annualStart, annualCutoffDate);
-
-    const adjusted = {
-        ...legacyRow,
-        hVacaciones: vacationPeriodDays,
-        acumVacaciones: vacationYtdDays,
-        dispVacaciones: vacationCredit - vacationYtdDays
-    };
-
-    const recomputedTotal =
-        adjusted.horasDia +
-        adjusted.horasTarde +
-        adjusted.horasNoche +
-        adjusted.hMedico +
-        adjusted.asOficiales +
-        (adjusted.hVacaciones * 8) +
-        adjusted.espYAc +
-        adjusted.hLDisp +
-        adjusted.hSind +
-        adjusted.hITAT +
-        adjusted.hITEC +
-        (adjusted.hVacAnt * 8) +
-        adjusted.hLeyFam +
-        adjusted.hTAJ +
-        adjusted.tiempoRetrasos;
-
-    return roundRow({ ...adjusted, totalHoras: recomputedTotal });
 };
 
 /**
@@ -1228,8 +1535,14 @@ const calculateEmployeeRowLegacy = (
         ? ytdCutoffDate.substring(0, 10)
         : periodEnd;
 
-    const empRawPeriod = allRawDataPeriod.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId);
-    const empRawYTD = allRawDataYTD.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId);
+    const empRawPeriod = normalizeRowsForUser(
+        allRawDataPeriod.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId),
+        user
+    );
+    const empRawYTD = normalizeRowsForUser(
+        allRawDataYTD.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId),
+        user
+    );
 
     const fallbackShift: 'M' | 'TN' = pData?.turnoAsignado === 'TN' ? 'TN' : 'M';
     const userShift = resolveShiftFromRows(empRawYTD.length > 0 ? empRawYTD : empRawPeriod, fallbackShift);
@@ -1258,6 +1571,7 @@ const calculateEmployeeRowLegacy = (
     });
 
     const workRows = empRawPeriod.filter(r => inPeriod(r.Fecha));
+    const dailyShiftMap = buildDailyShiftMap(workRows, userShift);
 
     const normalAudit = auditUnpairedPunches(workRows, (r) => isNormalWorkMotivo(r.MotivoAusencia));
     if (normalAudit.unmatchedEntries > 0 || normalAudit.unmatchedExits > 0) {
@@ -1271,7 +1585,8 @@ const calculateEmployeeRowLegacy = (
 
     let b: TimeBuckets = { horasDia: 0, excesoJornada1: 0, horasTarde: 0, nocturnas: 0, horasNoche: 0, festivas: 0 };
     workIntervals.forEach(interval => {
-        b = addIntervalToBuckets(b, interval, userShift, effectiveFestiveDates, effectiveVacationDates);
+        const shiftForDate = dailyShiftMap.get(interval.startDate) || userShift;
+        b = addIntervalToBuckets(b, interval, shiftForDate, effectiveFestiveDates, effectiveVacationDates);
     });
 
     const tajAudit = auditUnpairedPunches(workRows, () => true, 14);
@@ -1309,11 +1624,9 @@ const calculateEmployeeRowLegacy = (
     const acumMedico = sumHours(annualIncidentRows, 2, inYtd);
     const dispMedico = ANNUAL_CREDITS.MEDICO_HOURS - acumMedico;
 
-    // Las vacaciones (ID 5) ya no se cuentan desde fichajes, se inician en 0 
-    // y se sobreescriben después con los datos del calendario en calculateEmployeeRowWithCalendar
-    const hVacacionesDias = 0;
-    const acumVacacionesDias = 0;
-    const dispVacacionesDias = user.diasVacaciones ?? ANNUAL_CREDITS.VACATION_DAYS;
+    const hVacacionesDias = sumHours(empRawPeriod, 5, inPeriod) / 8;
+    const acumVacacionesDias = sumHours(annualIncidentRows, 5, inYtd) / 8;
+    const dispVacacionesDias = (user.diasVacaciones ?? ANNUAL_CREDITS.VACATION_DAYS) - acumVacacionesDias;
 
     const hVacAntDias = sumHours(empRawPeriod, 8, inPeriod) / 8;
 
@@ -1338,7 +1651,12 @@ const calculateEmployeeRowLegacy = (
     const numTAJ = countIncidents(empRawPeriod, 14, inPeriod);
     const hTAJ = hTAJFromIntervals;
 
-    const retrasos = calcularRetrasos(empRawPeriod, userShift, periodStart, periodEnd);
+    const retrasos = calcularRetrasos(
+        empRawPeriod,
+        (date) => dailyShiftMap.get(date) || userShift,
+        periodStart,
+        periodEnd
+    );
     const numRetrasos = retrasos.num;
     const tiempoRetrasos = retrasos.tiempo;
 
@@ -1412,18 +1730,17 @@ const getDuration = (row: RawDataRow): number => {
  * - Si entrada > horario + margen, se considera retraso
  * 
  * @param rows Todos los fichajes del empleado
- * @param turno Turno asignado al empleado ('M' o 'TN')
+ * @param getShiftForDate Resolución de turno por día ('M' o 'TN')
  * @param startDate Fecha inicio periodo (YYYY-MM-DD)
  * @param endDate Fecha fin periodo (YYYY-MM-DD)
  * @returns { num: cantidad de días con retraso, tiempo: horas totales de retraso }
  */
 const calcularRetrasos = (
     rows: RawDataRow[],
-    turno: 'M' | 'TN',
+    getShiftForDate: (date: string) => 'M' | 'TN',
     startDate: string,
     endDate: string
 ): { num: number; tiempo: number } => {
-    const horaEsperada = turno === 'M' ? 7 * 60 : 15 * 60; // En minutos desde medianoche
     const margenMin = 1 + 59 / 60; // 1min 59seg en minutos decimales
 
     const retrasosPorDia = new Map<string, number>();
@@ -1443,6 +1760,9 @@ const calcularRetrasos = (
 
     // Analizar cada día
     for (const [fecha, fichs] of porDia) {
+        const turnoDia = getShiftForDate(fecha);
+        const horaEsperada = turnoDia === 'M' ? 7 * 60 : 15 * 60;
+
         // Filtrar solo ENTRADAS normales (isEntrada soporta boolean/number/string)
         const entradas = fichs
             .filter(f =>
@@ -1525,7 +1845,50 @@ const colRef = (colNum: number): string => {
     return out;
 };
 
-export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[], fileName: string, startDate: string, endDate: string): Promise<void> => {
+type ExportDetailContext = {
+    rawDataPeriod?: RawDataRow[];
+    rawDataYTD?: RawDataRow[];
+    ytdStart?: string;
+    ytdEnd?: string;
+};
+
+const DETAIL_CODE_LABELS: Record<number, string> = {
+    2: 'Medico',
+    3: 'Asuntos Oficiales',
+    5: 'Vacaciones',
+    6: 'Especialista/Accidente',
+    7: 'Libre Disposicion',
+    8: 'Vacaciones Anteriores',
+    9: 'Sindical',
+    10: 'ITAT',
+    11: 'ITEC',
+    13: 'Ley Familias'
+};
+
+const DETAIL_CODES = [2, 3, 5, 6, 7, 8, 9, 10, 11, 13];
+
+const formatMinutesToHHMM = (minutes: number): string => {
+    const safe = ((Math.round(minutes) % 1440) + 1440) % 1440;
+    const h = Math.floor(safe / 60);
+    const m = safe % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+const getOperarioNumericId = (operario: string): number | null => {
+    if (!operario) return null;
+    const numeric = operario.replace(/\D/g, '');
+    if (!numeric) return null;
+    const parsed = Number(numeric);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const exportDetailedIncidenceToXlsx = async (
+    rows: DetailedIncidenceRow[],
+    fileName: string,
+    startDate: string,
+    endDate: string,
+    detailContext?: ExportDetailContext
+): Promise<void> => {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'APP PRESENCIA';
     workbook.created = new Date();
@@ -1546,7 +1909,9 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
         'Num. TAJ', 'H. TAJ', 'Num. Retrasos', 'Tiempo Retrasos'
     ];
 
-    const sortedRowsByOperario = [...rows].sort((a, b) => {
+    const sanitizedRows = rows.map(sanitizeDetailedRow);
+
+    const sortedRowsByOperario = [...sanitizedRows].sort((a, b) => {
         const aNum = parseInt(String(a.operario || '').replace(/\D/g, ''), 10);
         const bNum = parseInt(String(b.operario || '').replace(/\D/g, ''), 10);
         if (Number.isFinite(aNum) && Number.isFinite(bNum) && aNum !== bNum) {
@@ -1599,10 +1964,10 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
     });
     worksheet.autoFilter = {
         from: { row: 2, column: 1 },
-        to: { row: rows.length + 2, column: headers.length }
+        to: { row: sortedRowsByOperario.length + 2, column: headers.length }
     };
 
-    const totalTableRows = rows.length + 1;
+    const totalTableRows = sortedRowsByOperario.length + 1;
     const tableStartRow = 2;
     const tableEndRow = tableStartRow + totalTableRows - 1;
 
@@ -1652,7 +2017,7 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
 
     const hourColumns = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 33, 35, 37];
     const integerColumns = [30, 32, 34, 36];
-    for (let rowIdx = 3; rowIdx <= rows.length + 2; rowIdx++) {
+    for (let rowIdx = 3; rowIdx <= sortedRowsByOperario.length + 2; rowIdx++) {
         for (const col of hourColumns) {
             worksheet.getCell(`${colRef(col)}${rowIdx}`).numFmt = HOURS_FORMAT;
         }
@@ -1661,24 +2026,288 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
         }
     }
 
-    const totalHoras = rows.reduce((acc, r) => acc + r.totalHoras, 0);
-    const totalFestivas = rows.reduce((acc, r) => acc + r.festivas, 0);
-    const totalMedico = rows.reduce((acc, r) => acc + r.hMedico, 0);
-    const totalVacaciones = rows.reduce((acc, r) => acc + r.hVacaciones, 0);
-    const totalRetrasos = rows.reduce((acc, r) => acc + r.tiempoRetrasos, 0);
-    const totalTaj = rows.reduce((acc, r) => acc + r.hTAJ, 0);
-    const promedioHoras = rows.length > 0 ? totalHoras / rows.length : 0;
+    if (detailContext?.rawDataPeriod && detailContext?.rawDataYTD) {
+        const ytdStart = detailContext.ytdStart || `${endDate.substring(0, 4)}-01-01`;
+        const ytdEnd = detailContext.ytdEnd || endDate;
 
-    const topHours = [...rows]
+        const detailHeaders = [
+            'Operario',
+            'Nombre',
+            'Tipo',
+            'Codigo',
+            'Concepto',
+            'Fecha Inicio',
+            'Fecha Fin',
+            'Tramo',
+            'Horas',
+            'Dias',
+            'Origen'
+        ];
+
+        const groupRawByEmployee = (rawRows: RawDataRow[]): Map<number, RawDataRow[]> => {
+            const map = new Map<number, RawDataRow[]>();
+            rawRows.forEach(r => {
+                const id = toOperarioIdNumber(r.IDOperario);
+                if (!Number.isFinite(id)) return;
+                const current = map.get(id) || [];
+                current.push(r);
+                map.set(id, current);
+            });
+            return map;
+        };
+
+        const periodByEmployee = groupRawByEmployee(detailContext.rawDataPeriod);
+        const ytdByEmployee = groupRawByEmployee(detailContext.rawDataYTD);
+
+        const inPeriod = (dateStr: string): boolean => {
+            const normalized = normalizeDateStr(dateStr);
+            return normalized >= startDate && normalized <= endDate;
+        };
+
+        const inYtd = (dateStr: string): boolean => {
+            const normalized = normalizeDateStr(dateStr);
+            return normalized >= ytdStart && normalized <= ytdEnd;
+        };
+
+        const periodRows: Array<Array<string | number>> = [];
+        const ytdRows: Array<Array<string | number>> = [];
+
+        sortedRowsByOperario.forEach(summaryRow => {
+            const employeeId = getOperarioNumericId(summaryRow.operario);
+            if (!Number.isFinite(employeeId)) return;
+
+            const employeePeriodRows = periodByEmployee.get(employeeId) || [];
+            const employeeYtdRows = ytdByEmployee.get(employeeId) || [];
+
+            DETAIL_CODES.forEach(code => {
+                const concept = DETAIL_CODE_LABELS[code] || `Motivo ${code}`;
+
+                const periodIntervals = buildIncidentIntervalsByCode(employeePeriodRows.filter(r => inPeriod(r.Fecha)), code);
+                let periodHoursTotal = 0;
+                periodIntervals.forEach(interval => {
+                    const hours = round2(getIntervalDuration(interval));
+                    periodHoursTotal += hours;
+                    periodRows.push([
+                        summaryRow.operario,
+                        summaryRow.nombre,
+                        'DETALLE',
+                        code,
+                        concept,
+                        interval.startDate,
+                        interval.endDate,
+                        `${formatMinutesToHHMM(interval.startMin)}-${formatMinutesToHHMM(interval.endMin)}${interval.endDate !== interval.startDate ? ' (+1)' : ''}`,
+                        hours,
+                        round2(hours / 8),
+                        'Fichajes'
+                    ]);
+                });
+
+                if (periodHoursTotal > 0) {
+                    periodRows.push([
+                        summaryRow.operario,
+                        summaryRow.nombre,
+                        'TOTAL',
+                        code,
+                        concept,
+                        startDate,
+                        endDate,
+                        '-',
+                        round2(periodHoursTotal),
+                        round2(periodHoursTotal / 8),
+                        'Resumen Periodo'
+                    ]);
+                }
+
+                const ytdIntervals = buildIncidentIntervalsByCode(employeeYtdRows.filter(r => inYtd(r.Fecha)), code);
+                let ytdHoursTotal = 0;
+                ytdIntervals.forEach(interval => {
+                    const hours = round2(getIntervalDuration(interval));
+                    ytdHoursTotal += hours;
+                    ytdRows.push([
+                        summaryRow.operario,
+                        summaryRow.nombre,
+                        'DETALLE',
+                        code,
+                        concept,
+                        interval.startDate,
+                        interval.endDate,
+                        `${formatMinutesToHHMM(interval.startMin)}-${formatMinutesToHHMM(interval.endMin)}${interval.endDate !== interval.startDate ? ' (+1)' : ''}`,
+                        hours,
+                        round2(hours / 8),
+                        'Fichajes'
+                    ]);
+                });
+
+                if (ytdHoursTotal > 0) {
+                    ytdRows.push([
+                        summaryRow.operario,
+                        summaryRow.nombre,
+                        'TOTAL',
+                        code,
+                        concept,
+                        ytdStart,
+                        ytdEnd,
+                        '-',
+                        round2(ytdHoursTotal),
+                        round2(ytdHoursTotal / 8),
+                        'Resumen YTD'
+                    ]);
+                }
+            });
+        });
+
+        const sortDetailRows = (rowsToSort: Array<Array<string | number>>) => {
+            rowsToSort.sort((a, b) => {
+                const operarioA = getOperarioNumericId(String(a[0])) ?? Number.MAX_SAFE_INTEGER;
+                const operarioB = getOperarioNumericId(String(b[0])) ?? Number.MAX_SAFE_INTEGER;
+                if (operarioA !== operarioB) return operarioA - operarioB;
+
+                const codeA = Number(a[3]) || 0;
+                const codeB = Number(b[3]) || 0;
+                if (codeA !== codeB) return codeA - codeB;
+
+                const tipoOrder = (value: string): number => (value === 'DETALLE' ? 0 : 1);
+                const tipoA = tipoOrder(String(a[2] || ''));
+                const tipoB = tipoOrder(String(b[2] || ''));
+                if (tipoA !== tipoB) return tipoA - tipoB;
+
+                const dateA = String(a[5] || '');
+                const dateB = String(b[5] || '');
+                if (dateA !== dateB) return dateA.localeCompare(dateB);
+
+                const tramoA = String(a[7] || '');
+                const tramoB = String(b[7] || '');
+                return tramoA.localeCompare(tramoB);
+            });
+        };
+
+        sortDetailRows(periodRows);
+        sortDetailRows(ytdRows);
+
+        const createDetailSheet = (
+            sheetName: string,
+            title: string,
+            helpText: string,
+            tableName: string,
+            rowsData: Array<Array<string | number>>
+        ) => {
+            const sheet = workbook.addWorksheet(sheetName, {
+                views: [{ state: 'frozen', ySplit: 3, xSplit: 2, showGridLines: false }]
+            });
+
+            sheet.columns = [
+                { width: 10 },
+                { width: 30 },
+                { width: 10 },
+                { width: 8 },
+                { width: 22 },
+                { width: 12 },
+                { width: 12 },
+                { width: 18 },
+                { width: 10 },
+                { width: 10 },
+                { width: 18 }
+            ];
+
+            sheet.mergeCells(`A1:${colRef(detailHeaders.length)}1`);
+            const titleCell = sheet.getCell('A1');
+            titleCell.value = title;
+            titleCell.font = { name: 'Arial', size: 11, bold: true, color: { argb: 'FF1F4E78' } };
+            titleCell.alignment = { horizontal: 'left', vertical: 'middle' };
+            sheet.getRow(1).height = 22;
+
+            sheet.mergeCells(`A2:${colRef(detailHeaders.length)}2`);
+            const helpCell = sheet.getCell('A2');
+            helpCell.value = helpText;
+            helpCell.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FF5B5B5B' } };
+
+            const tableRows = rowsData.length > 0
+                ? rowsData
+                : [['-', 'Sin detalle', '-', '-', '-', '-', '-', '-', 0, 0, '-']];
+
+            sheet.addTable({
+                name: tableName,
+                ref: 'A3',
+                headerRow: true,
+                style: { theme: 'TableStyleLight1', showRowStripes: true },
+                columns: detailHeaders.map(name => ({ name })),
+                rows: tableRows
+            });
+
+            const startRow = 3;
+            const endRow = startRow + tableRows.length;
+            for (let r = startRow; r <= endRow; r++) {
+                for (let c = 1; c <= detailHeaders.length; c++) {
+                    const cell = sheet.getCell(`${colRef(c)}${r}`);
+                    const isHeader = r === startRow;
+                    const isOddDataRow = (r - startRow) % 2 === 1;
+                    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+                    cell.border = {
+                        top: { style: 'thin', color: { argb: 'FF8E8E8E' } },
+                        left: { style: 'thin', color: { argb: 'FF8E8E8E' } },
+                        bottom: { style: 'thin', color: { argb: 'FF8E8E8E' } },
+                        right: { style: 'thin', color: { argb: 'FF8E8E8E' } }
+                    };
+
+                    if (isHeader) {
+                        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1E1E' } };
+                        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+                    } else {
+                        const tipo = String(sheet.getCell(`C${r}`).value || '');
+                        const isTotal = tipo === 'TOTAL';
+                        cell.fill = {
+                            type: 'pattern',
+                            pattern: 'solid',
+                            fgColor: { argb: isTotal ? 'FFEAF2FF' : (isOddDataRow ? 'FFF7F7F7' : 'FFFFFFFF') }
+                        };
+                        cell.font = {
+                            name: 'Arial',
+                            size: 10,
+                            bold: isTotal,
+                            color: { argb: 'FF1E1E1E' }
+                        };
+                    }
+                }
+                sheet.getCell(`I${r}`).numFmt = HOURS_FORMAT;
+                sheet.getCell(`J${r}`).numFmt = HOURS_FORMAT;
+            }
+        };
+
+        createDetailSheet(
+            'DETALLE_PERIODO',
+            `Detalle incidencias del periodo (${startDate} a ${endDate})`,
+            `Cada tramo de incidencia del periodo analizado. Filtra por Operario/Codigo para auditoria rapida.`,
+            'T_DETALLE_PERIODO',
+            periodRows
+        );
+
+        createDetailSheet(
+            'DETALLE_YTD',
+            `Detalle incidencias acumuladas YTD (${ytdStart} a ${ytdEnd})`,
+            `Cada tramo de incidencia acumulado anual (YTD).`,
+            'T_DETALLE_YTD',
+            ytdRows
+        );
+    }
+
+    const totalHoras = sanitizedRows.reduce((acc, r) => acc + r.totalHoras, 0);
+    const totalFestivas = sanitizedRows.reduce((acc, r) => acc + r.festivas, 0);
+    const totalMedico = sanitizedRows.reduce((acc, r) => acc + r.hMedico, 0);
+    const totalVacaciones = sanitizedRows.reduce((acc, r) => acc + r.hVacaciones, 0);
+    const totalRetrasos = sanitizedRows.reduce((acc, r) => acc + r.tiempoRetrasos, 0);
+    const totalTaj = sanitizedRows.reduce((acc, r) => acc + r.hTAJ, 0);
+    const promedioHoras = sanitizedRows.length > 0 ? totalHoras / sanitizedRows.length : 0;
+
+    const topHours = [...sanitizedRows]
         .sort((a, b) => b.totalHoras - a.totalHoras)
         .slice(0, 10);
 
-    const topRetrasos = [...rows]
+    const topRetrasos = [...sanitizedRows]
         .sort((a, b) => b.tiempoRetrasos - a.tiempoRetrasos)
         .slice(0, 10);
 
     const byColectivo = new Map<string, { colectivo: string; horas: number; festivas: number; retrasos: number; empleados: number }>();
-    for (const row of rows) {
+    for (const row of sanitizedRows) {
         const key = row.colectivo || 'SIN COLECTIVO';
         const agg = byColectivo.get(key) ?? { colectivo: key, horas: 0, festivas: 0, retrasos: 0, empleados: 0 };
         agg.horas += row.totalHoras;
@@ -1695,7 +2324,7 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
         improductivos: { horas: 0, excesos: 0, ausencias: 0, retrasos: 0, empleados: 0 }
     };
 
-    for (const row of rows) {
+    for (const row of sanitizedRows) {
         // En roles/columnas, si productivo es boolean true
         const isProd = row.productivo === true;
         const target = isProd ? prodStats.productivos : prodStats.improductivos;
@@ -1708,13 +2337,13 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
     }
 
     const bloquesDistribucion = [
-        { concepto: 'Horas Dia', valor: rows.reduce((acc, r) => acc + r.horasDia, 0) },
-        { concepto: 'Horas Tarde', valor: rows.reduce((acc, r) => acc + r.horasTarde, 0) },
-        { concepto: 'Horas Noche', valor: rows.reduce((acc, r) => acc + r.horasNoche, 0) },
-        { concepto: 'Nocturnas', valor: rows.reduce((acc, r) => acc + r.nocturnas, 0) },
+        { concepto: 'Horas Dia', valor: sanitizedRows.reduce((acc, r) => acc + r.horasDia, 0) },
+        { concepto: 'Horas Tarde', valor: sanitizedRows.reduce((acc, r) => acc + r.horasTarde, 0) },
+        { concepto: 'Horas Noche', valor: sanitizedRows.reduce((acc, r) => acc + r.horasNoche, 0) },
+        { concepto: 'Nocturnas', valor: sanitizedRows.reduce((acc, r) => acc + r.nocturnas, 0) },
         { concepto: 'Festivas', valor: totalFestivas },
-        { concepto: 'As. Oficiales', valor: rows.reduce((acc, r) => acc + r.asOficiales, 0) },
-        { concepto: 'H. Sind', valor: rows.reduce((acc, r) => acc + r.hSind, 0) },
+        { concepto: 'As. Oficiales', valor: sanitizedRows.reduce((acc, r) => acc + r.asOficiales, 0) },
+        { concepto: 'H. Sind', valor: sanitizedRows.reduce((acc, r) => acc + r.hSind, 0) },
         { concepto: 'H. TAJ', valor: totalTaj }
     ];
 
@@ -1741,7 +2370,7 @@ export const exportDetailedIncidenceToXlsx = async (rows: DetailedIncidenceRow[]
     analysis.getCell('A2').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
 
     const kpis = [
-        ['Operarios en reporte', rows.length],
+        ['Operarios en reporte', sanitizedRows.length],
         ['Total horas', totalHoras],
         ['Promedio horas por operario', promedioHoras],
         ['Horas festivas', totalFestivas],
@@ -1991,17 +2620,28 @@ export const generatePayrollExport = async (
 
     // Mapear Operario[] → User[] para el pipeline interno
     const { getEmployeeRichData } = await import('../employeeService');
-    const users: User[] = await Promise.all(operarios.map(async op => {
+    const users: User[] = [];
+    let richDataAllowed = true;
+    let richDataWarned = false;
+
+    for (const op of operarios) {
         let diasVacaciones: number | undefined;
-        try {
-            const richData = await getEmployeeRichData(op.IDOperario.toString());
-            if (richData && typeof richData.DiasVacaciones === 'number') {
-                diasVacaciones = richData.DiasVacaciones;
+        if (richDataAllowed) {
+            try {
+                const richData = await getEmployeeRichData(op.IDOperario.toString());
+                if (richData && typeof richData.DiasVacaciones === 'number') {
+                    diasVacaciones = richData.DiasVacaciones;
+                }
+            } catch {
+                richDataAllowed = false;
+                if (!richDataWarned) {
+                    console.warn('⚠️ Sin permisos para datos enriquecidos de Firebase. Se continua con valores base sin bloquear exportacion.');
+                    richDataWarned = true;
+                }
             }
-        } catch (error) {
-            console.warn(`⚠️ No se pudo obtener datos enriquecidos para operario ${op.IDOperario}`);
         }
-        return {
+
+        users.push({
             id: op.IDOperario,
             name: op.DescOperario,
             role: Role.Employee,
@@ -2009,8 +2649,8 @@ export const generatePayrollExport = async (
             flexible: op.Flexible,
             productivo: op.Productivo,
             diasVacaciones
-        };
-    }));
+        });
+    }
 
     console.group('📊 [generatePayrollExport] Inicio');
     console.log(`Periodo: ${periodStart} → ${periodEnd}`);
@@ -2083,7 +2723,7 @@ export const generatePayrollExport = async (
     );
 
     // ── 4.1. Filtrar empleados "fantasma" (Cero actividad) ────────────
-    const rows = allRows.filter(r => {
+    const activeRows = allRows.filter(r => {
         const totalActividad =
             r.totalHoras + r.festivas + r.hMedico + r.hVacaciones +
             r.hLDisp + r.hLeyFam + r.asOficiales + r.espYAc +
@@ -2093,7 +2733,10 @@ export const generatePayrollExport = async (
         return totalActividad > 0 || r.diasITAT > 0 || r.diasITEC > 0;
     });
 
-    console.log(`✅ Filas generadas: ${rows.length} (Excluidos: ${allRows.length - rows.length} inactivos)`);
+    const rows = activeRows.length > 0 ? activeRows : allRows;
+    const excludedCount = activeRows.length > 0 ? (allRows.length - activeRows.length) : 0;
+
+    console.log(`✅ Filas generadas: ${rows.length} (Excluidos: ${excludedCount} inactivos)`);
 
     // ── 5. Generar nombre de fichero ──────────────────────────────────
     onProgress?.({
@@ -2111,7 +2754,12 @@ export const generatePayrollExport = async (
         percent: 98,
         message: 'Guardando archivo en tu equipo...'
     });
-    await exportDetailedIncidenceToXlsx(rows, fileName, periodStart, periodEnd);
+    await exportDetailedIncidenceToXlsx(rows, fileName, periodStart, periodEnd, {
+        rawDataPeriod: allRawDataPeriod,
+        rawDataYTD: allRawDataYTD,
+        ytdStart,
+        ytdEnd
+    });
     onProgress?.({
         phase: 'finalizando',
         percent: 100,

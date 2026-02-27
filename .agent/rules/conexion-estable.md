@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+008 MANEJO RED
+
 description: Protocolos obligatorios para el manejo de red, detección de estado online/offline y persistencia de datos.
 globs: ["src/services//*", "src/hooks//", "src/components/**/"]
 

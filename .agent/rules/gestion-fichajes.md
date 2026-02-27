@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+004 INSERTAR INCIDENCIAS -- **REGLA CLAVE*
+
 \# Instrucciones de Gestión de Fichajes por Incidencias
 
 

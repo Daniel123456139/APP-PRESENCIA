@@ -200,12 +200,7 @@ const ManualIncidentModal: React.FC<ManualIncidentModalProps> = ({
                         >
                             <option value="">{loading ? "Cargando motivos..." : "-- Selecciona un motivo --"}</option>
                             {motivos
-                                .filter(m => ![1, 14].includes(parseInt(m.IDMotivo))) // Applying standard exclusions if needed, or keeping all? Prompt said "mantener exclusiones existentes donde aplique". ManualIncidentModal didn't have exclusions before, but "eliminate hardcoded lists" implies we should trust the user?
-                                // Actually, ManualIncidentModal in previous view showed: map(reason => (option...))
-                                // It didn't filter.
-                                // But the prompt says: "mantener las exclusiones existentes donde aplique (p.ej. no permitir 01 Fin de Jornada o 14 TAJ en selects de justificación si ya estaba así)"
-                                // Manual Incident usually implies creating a justification or specific absence. 01 and 14 are usually system generated or terminal actions.
-                                // I will apply the filter to be safe and consistent with "Standardize".
+                                .filter(m => ![1].includes(parseInt(m.IDMotivo)))
                                 .slice() // copy to sort
                                 .sort((a, b) => parseInt(a.IDMotivo) - parseInt(b.IDMotivo))
                                 .map(reason => (

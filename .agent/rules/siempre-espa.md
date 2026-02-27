@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+001 IDIOMA
+
 Contenido:
 1. El agente debe responder siempre, única y exclusivamente en idioma español en todas sus interacciones, sin importar el idioma utilizado por el usuario en el prompt,.
 2. Esta restricción de idioma es obligatoria para todos los mensajes del chat, planes de implementación, listas de tareas y resúmenes de ejecución,,,.

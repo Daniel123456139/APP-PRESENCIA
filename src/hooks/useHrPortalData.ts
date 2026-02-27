@@ -13,7 +13,6 @@ import { useProcessDataWorker } from './useProcessDataWorker';
 import { fetchSyntheticPunches } from '../services/firestoreService';
 import { getCalendarioOperario, CalendarioDia } from '../services/erpApi';
 import { normalizeDateKey, extractTimeHHMM } from '../utils/datetime';
-import { toISODateLocal } from '../utils/localDate';
 import logger from '../utils/logger';
 import { resolveEmployeeCollection } from '../services/firebaseSchemaService';
 import type { PayrollExportProgress } from '../services/exports/detailedIncidenceExportService';
@@ -57,8 +56,6 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         error: fichajesError,
         refresh: refreshErpData
     } = useFichajes(startDate, endDate, startTime, endTime);
-
-    const lastSystemDayRef = useRef<string>(toISODateLocal(new Date()));
 
     // 2. Cargar Bajas Médicas Activas desde Firestore
     const { data: activeSickLeavesRaw = [], refetch: refetchActiveSickLeaves } = useQuery({
@@ -374,17 +371,6 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         }
     };
 
-    const handleFreeHoursExport = async (section: string, filterEmployeeIds: string[]) => {
-        logger.info('Generando Excel de Horas Libres...');
-        try {
-            const exportService = await import('../services/exports/freeHoursExportService');
-            // @ts-ignore - Temporary until service is updated
-            await exportService.generateFreeHoursExport(section, filterEmployeeIds, operarios);
-        } catch (error: any) {
-            logger.error('Error:', error);
-        }
-    };
-
     const registerMissingEmployee = async (employeeId: number): Promise<void> => {
         const target = operarios.find(op => op.IDOperario === employeeId);
         if (!target) {
@@ -444,18 +430,6 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         return diffDays > 2;
     }, [startDate, endDate]);
 
-    useEffect(() => {
-        const timer = setInterval(() => {
-            const today = toISODateLocal(new Date());
-            if (today === lastSystemDayRef.current) return;
-
-            lastSystemDayRef.current = today;
-            refreshErpData();
-        }, 60000);
-
-        return () => clearInterval(timer);
-    }, [refreshErpData]);
-
     return {
         erpData,
         processedData,
@@ -480,7 +454,6 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         selectedEmployeeIds,
         setSelectedEmployeeIds,
         handleExport,
-        handleFreeHoursExport,
         isPayrollExporting,
         payrollExportProgress,
         isLongRange,

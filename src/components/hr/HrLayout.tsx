@@ -80,7 +80,6 @@ export interface HrLayoutContextType {
 
     // Actions
     handleExport: (range?: { startDate: string; endDate: string }) => void;
-    handleFreeHoursExport: (section: string, filterEmployeeIds: string[]) => void;
     registerMissingEmployee: (employeeId: number) => Promise<void>;
     handleExportResumen: () => void;
     handleUnproductivityExport: () => void;
@@ -191,7 +190,6 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         selectedEmployeeIds,
         setSelectedEmployeeIds,
         handleExport,
-        handleFreeHoursExport,
         isPayrollExporting,
         payrollExportProgress,
         registerMissingEmployee,
@@ -316,7 +314,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         effectiveCalendarDays: companyCalendarDays || [],
         shouldUseVirtualization,
 
-        handleExport, handleFreeHoursExport,
+        handleExport,
         isPayrollExporting,
         payrollExportProgress,
         registerMissingEmployee,

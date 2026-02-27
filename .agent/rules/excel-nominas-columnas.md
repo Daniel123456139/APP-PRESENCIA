@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+006 COLUMNAS EXEL -- **REGLA CLAVE**
+
 # Guia de Columnas: Excel de Nominas (Regla Oficial del Proyecto)
 
 Este documento define las reglas que el proyecto debe respetar siempre para evitar errores en calculo de horas, cruce ERP/Firebase y exclusiones entre tablas.

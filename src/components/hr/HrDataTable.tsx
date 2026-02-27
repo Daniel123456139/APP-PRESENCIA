@@ -17,10 +17,17 @@ interface HrDataTableProps {
     companyHolidays?: CompanyHoliday[];
     isLongRange?: boolean;
     flexibleEmployeeIds?: Set<number>;
+    highlightEmployeeIds?: Set<number>;
 }
 
 // Helpers for keys
-const getGapKey = (empId: number, date: string, start: string) => `gap-${empId}-${date}-${start}`;
+const normalizeGapBoundary = (value: string): string => {
+    if (!value) return '';
+    return value.replace(' (+1)', '').substring(0, 5);
+};
+
+const getGapKey = (empId: number, date: string, start: string, end: string) =>
+    `gap-${empId}-${date}-${normalizeGapBoundary(start)}-${normalizeGapBoundary(end)}`;
 const getDevKey = (empId: number, date: string) => `dev-${empId}-${date}`;
 
 // --- SORTING UTILS ---
@@ -35,10 +42,11 @@ const parseStartMinutes = (schedule: string): number | null => {
 
 export const computeDisplayJustifiedHours = (row: ProcessedDataRow): number => {
     const base = Number(row.horasJustificadas || 0);
-    if (base > 0) return base;
 
     const intervals = row.justifiedIntervals || [];
-    if (intervals.length === 0) return 0;
+    if (intervals.length === 0) {
+        return Number.isFinite(base) ? Number(base.toFixed(2)) : 0;
+    }
 
     const toMinutes = (hhmm: string): number => {
         const [h, m] = (hhmm || '00:00').split(':').map(Number);
@@ -57,7 +65,10 @@ export const computeDisplayJustifiedHours = (row: ProcessedDataRow): number => {
         return acc + hours;
     }, 0);
 
-    return Number(inferred.toFixed(2));
+    const inferredRounded = Number(inferred.toFixed(2));
+    if (!Number.isFinite(base) || base <= 0) return inferredRounded;
+    if (inferredRounded <= 0) return Number(base.toFixed(2));
+    return Number(Math.max(base, inferredRounded).toFixed(2));
 };
 
 const turnoRank = (turno: string): number => {
@@ -347,7 +358,8 @@ const SummaryView: React.FC<{
     companyHolidays?: CompanyHoliday[];
     isLongRange?: boolean;
     flexibleEmployeeIds?: Set<number>;
-}> = memo(({ data, rawData, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, companyHolidays, isLongRange, flexibleEmployeeIds }) => {
+    highlightEmployeeIds?: Set<number>;
+}> = memo(({ data, rawData, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, companyHolidays, isLongRange, flexibleEmployeeIds, highlightEmployeeIds }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [sortConfig, setSortConfig] = useState<{ key: SortableKeys; direction: SortDirection } | null>({ key: 'operario', direction: 'ascending' });
 
@@ -365,7 +377,7 @@ const SummaryView: React.FC<{
 
     const augmentedData = useMemo(() => {
         return data.map(row => {
-            const pendingGaps = row.unjustifiedGaps.filter(g => !justifiedIncidentKeys.has(getGapKey(row.operario, g.date, g.start))).length;
+            const pendingGaps = row.unjustifiedGaps.filter(g => !justifiedIncidentKeys.has(getGapKey(row.operario, g.date, g.start, g.end))).length;
             const pendingDevs = row.workdayDeviations.filter(d => !justifiedIncidentKeys.has(getDevKey(row.operario, d.date))).length;
             const missingOuts = row.missingClockOuts?.length || 0;
             const absences = row.absentDays?.length || 0;
@@ -534,9 +546,12 @@ const SummaryView: React.FC<{
                             const hasPendingIncidents = row.incidentCount > 0;
 
                             const isFlexible = row.isFlexible || flexibleEmployeeIds?.has(row.operario);
-                            const rowClass = isFlexible
-                                ? "bg-emerald-50 hover:bg-emerald-100 border-l-4 border-l-emerald-400"
-                                : "bg-white hover:bg-slate-50 border-l-4 border-l-transparent";
+                            const hasLeaveConflict = highlightEmployeeIds?.has(row.operario);
+                            const rowClass = hasLeaveConflict
+                                ? "bg-[#f3d7cf] hover:bg-[#ecc2b5] border-l-4 border-l-[#8b3f2f]"
+                                : (isFlexible
+                                    ? "bg-emerald-50 hover:bg-emerald-100 border-l-4 border-l-emerald-400"
+                                    : "bg-white hover:bg-slate-50 border-l-4 border-l-transparent");
 
 
                             return (
@@ -545,6 +560,9 @@ const SummaryView: React.FC<{
                                     <td className="px-4 py-4 font-medium text-slate-800 relative group/name">
                                         <div className="flex items-center gap-1">
                                             <span>{row.nombre}</span>
+                                            {hasLeaveConflict && (
+                                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#8b3f2f] text-white">BAJA/VAC + FICHAJE</span>
+                                            )}
                                             {row.vacationConflicts && row.vacationConflicts.length > 0 && (
                                                 <span className="text-amber-500 cursor-help" title="Conflicto: Vacaciones con fichajes">
                                                     ⚠️
@@ -685,9 +703,10 @@ const HrDataTable: React.FC<HrDataTableProps> = ({
     endDate,
     companyHolidays,
     isLongRange,
-    flexibleEmployeeIds
+    flexibleEmployeeIds,
+    highlightEmployeeIds
 }) => {
-    return <SummaryView data={data} rawData={rawData} onReviewGaps={onReviewGaps} onManualIncident={onManualIncident} onExport={onExport} justifiedIncidentKeys={justifiedIncidentKeys} startDate={startDate} endDate={endDate} companyHolidays={companyHolidays} isLongRange={isLongRange} flexibleEmployeeIds={flexibleEmployeeIds} />;
+    return <SummaryView data={data} rawData={rawData} onReviewGaps={onReviewGaps} onManualIncident={onManualIncident} onExport={onExport} justifiedIncidentKeys={justifiedIncidentKeys} startDate={startDate} endDate={endDate} companyHolidays={companyHolidays} isLongRange={isLongRange} flexibleEmployeeIds={flexibleEmployeeIds} highlightEmployeeIds={highlightEmployeeIds} />;
 };
 
 export default memo(HrDataTable);

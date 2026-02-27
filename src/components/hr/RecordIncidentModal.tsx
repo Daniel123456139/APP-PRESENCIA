@@ -108,7 +108,9 @@ const RecordIncidentModal: React.FC<RecordIncidentModalProps> = ({
                 }
 
                 // FIX #1: Include BOTH start AND end time to allow multiple gaps on same day
-                const uniqueKey = `gap-${employeeData.operario}-${gap.date}-${gap.start}-${gap.end}`;
+                const normalizedStart = normalizeDisplayTime(gap.start);
+                const normalizedEnd = normalizeDisplayTime(gap.end);
+                const uniqueKey = `gap-${employeeData.operario}-${gap.date}-${normalizedStart}-${normalizedEnd}`;
                 if (keysToCheck.has(uniqueKey)) return null;
 
                 return {

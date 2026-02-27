@@ -137,8 +137,7 @@ const MainRoutes: React.FC = () => {
         const handleOnline = async () => {
             showNotification("Conexión restablecida. Sincronizando datos pendientes...", "success");
             await SyncService.processQueue();
-            // Invalidate queries to refresh data after sync
-            queryClient.invalidateQueries({ queryKey: ['fichajes'] });
+            showNotification("Sincronización completada. Pulsa 'Recargar Datos' para actualizar la vista.", "info");
         };
         const handleOffline = () => {
             showNotification("Se ha perdido la conexión. Trabajando en modo Offline.", "warning");

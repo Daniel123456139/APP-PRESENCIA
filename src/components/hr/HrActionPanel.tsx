@@ -4,7 +4,8 @@ interface HrActionPanelProps {
     onReload: () => void;
     isReloading: boolean;
     onExport: () => void;
-    onFreeHoursExport: () => void;
+    onExportVacaciones: () => void;
+    onExportHorasLibres: () => void;
     onLateArrivalsOpen: () => void;
     onAdjustmentModalOpen: () => void;
     onFutureIncidentsOpen: () => void;
@@ -17,7 +18,8 @@ const HrActionPanel: React.FC<HrActionPanelProps> = ({
     onReload,
     isReloading,
     onExport,
-    onFreeHoursExport,
+    onExportVacaciones,
+    onExportHorasLibres,
     onLateArrivalsOpen,
     onAdjustmentModalOpen,
     onFutureIncidentsOpen,
@@ -54,7 +56,7 @@ const HrActionPanel: React.FC<HrActionPanelProps> = ({
                 </button>
 
 
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2">
                     <button
                         onClick={onExport}
                         className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold shadow-sm"
@@ -64,14 +66,26 @@ const HrActionPanel: React.FC<HrActionPanelProps> = ({
                         </svg>
                         Excel Nóminas
                     </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
                     <button
-                        onClick={onFreeHoursExport}
-                        className="flex items-center justify-center gap-2 px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-semibold shadow-sm"
+                        onClick={onExportVacaciones}
+                        className="flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold shadow-sm"
+                    >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        Listado Vacaciones
+                    </button>
+                    <button
+                        onClick={onExportHorasLibres}
+                        className="flex items-center justify-center gap-2 px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold shadow-sm"
                     >
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        Excel Horas
+                        Listado H. Libres
                     </button>
                 </div>
 
@@ -120,7 +134,7 @@ const HrActionPanel: React.FC<HrActionPanelProps> = ({
             {lastUpdated && (
                 <div className="pt-2 border-t border-slate-200">
                     <p className="text-[10px] text-slate-500 flex items-center justify-between">
-                        <span>Sincronización automática</span>
+                        <span>Última actualización</span>
                         <span className="font-mono">{new Date(lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </p>
                     {isRefetching && (

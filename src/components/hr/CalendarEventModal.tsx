@@ -15,7 +15,7 @@ const CalendarEventModal: React.FC<CalendarEventModalProps> = ({ isOpen, onClose
 
     const manualAbsenceReasons = useMemo(() => {
         return motivos
-            .filter(m => ![1, 14].includes(parseInt(m.IDMotivo)))
+            .filter(m => ![1].includes(parseInt(m.IDMotivo)))
             .map(m => ({
                 id: parseInt(m.IDMotivo),
                 desc: `${m.IDMotivo.padStart(2, '0')} - ${m.DescMotivo}`

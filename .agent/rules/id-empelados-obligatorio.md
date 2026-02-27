@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+009 INTEGRIDAD REFERENCIAL
+
 description: Regla de integridad referencial. Prohíbe la creación de datos de RRHH sin un ID de empleado válido. globs: ["src/types//*", "src/services//", "src/components/**/"]
 
 Protocolo de Identidad: El ID es Sagrado

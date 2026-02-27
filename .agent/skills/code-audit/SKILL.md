@@ -26,9 +26,13 @@ Utiliza estos patrones para identificar riesgos rápidamente:
 Analiza el código manualmente basándote en los resultados automáticos:
 1.  **Rendimiento & Scalabilidad:**
     - **React:** Busca `useEffect` sin dependencias o con dependencias inestables que causen loops.
-    - **Firestore:** Identifica lecturas masivas sin particionar o filtros en cliente en lugar de queries.
-2.  **Security de Dependencias:** Revisa el reporte de `npm audit` para vulnerabilidades críticas (CVSS > 7.0).
-3.  **Protocolo Auto-Fix:**
+    - **Firestore/Supabase:** Identifica lecturas masivas sin particionar, llamadas de mutación (`addDoc`, `updateDoc`) que no estén en bloques `try/catch`.
+2.  **Resiliencia y Offline-First:**
+    - Verifica si las mutaciones de base de datos validan `navigator.onLine` o tienen un `catch` para manejar errores de red.
+    - Identifica operaciones críticas sin feedback visual (loading state).
+3.  **Security de Dependencias:** Revisa el reporte de `npm audit` para vulnerabilidades críticas (CVSS > 7.0).
+4.  **Protocolo Auto-Fix y Calidad:**
+    - Si encuentras base de datos o API operando sin ID del empleado (`employeeId` faltante) -> **MARCAR COMO BLOQUEANTE**.
     - Si encuentras `console.log` residuales -> **BORRAR**.
     - Si encuentras imports no usados -> **BORRAR**.
     - Si encuentras variables `any` en TypeScript -> **MARCAR** como deuda técnica.

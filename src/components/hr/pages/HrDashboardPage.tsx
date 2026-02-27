@@ -12,10 +12,17 @@ import AusenciasTable from '../AusenciasTable';
 import VacationsTable from '../VacationsTable';
 import ActiveBajasTable from '../ActiveBajasTable';
 import ExportNominasModal from '../ExportNominasModal';
+import ExportPeriodModal from '../ExportPeriodModal';
+import { useOperarios } from '../../../hooks/useErp';
 
 const HrDashboardPage: React.FC = () => {
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
     const [exportMonth, setExportMonth] = useState('');
+    const [isVacExportModalOpen, setIsVacExportModalOpen] = useState(false);
+    const [vacExportMonth, setVacExportMonth] = useState('');
+    const [isHLExportModalOpen, setIsHLExportModalOpen] = useState(false);
+    const [hlExportMonth, setHlExportMonth] = useState('');
+    const { operarios } = useOperarios(false);
     const {
         startDate, setStartDate,
         endDate, setEndDate,
@@ -61,15 +68,15 @@ const HrDashboardPage: React.FC = () => {
         employeeCalendarsByDate
     } = useHrLayout();
 
-    // Periodo de nómina: del 25 del mes anterior al 24 del mes seleccionado
-    // Ejemplo: "febrero 2026" → 25/01/2026 → 24/02/2026
+    // Periodo de nómina: del 26 del mes anterior al 25 del mes seleccionado
+    // Ejemplo: "febrero 2026" → 26/01/2026 → 25/02/2026
     const getFullMonthRange = (dateStr: string) => {
         const base = new Date(`${dateStr}T00:00:00`);
         const year = base.getFullYear();
         const month = base.getMonth(); // 0-indexed
 
-        // Inicio: día 25 del mes anterior
-        const start = new Date(year, month - 1, 25);
+        // Inicio: día 26 del mes anterior
+        const start = new Date(year, month - 1, 26);
         // Fin: día 25 del mes seleccionado (incluido)
         const end = new Date(year, month, 25);
 
@@ -93,6 +100,58 @@ const HrDashboardPage: React.FC = () => {
     const handleExportSelectedPeriod = () => {
         handleExport({ startDate, endDate });
         setIsExportModalOpen(false);
+    };
+
+    // --- Handlers para Exportación Vacaciones por Sección ---
+    const handleVacExportRequest = () => {
+        setVacExportMonth(startDate.slice(0, 7));
+        setIsVacExportModalOpen(true);
+    };
+    const handleVacExportFullMonth = async () => {
+        const monthSource = vacExportMonth ? `${vacExportMonth}-01` : startDate;
+        const range = getFullMonthRange(monthSource);
+        setIsVacExportModalOpen(false);
+        try {
+            const svc = await import('../../../services/exports/vacationBySectionExportService');
+            await svc.generateVacationBySectionExport(range.startDate, range.endDate, operarios);
+        } catch (err: any) {
+            window.alert(`Error al generar listado de vacaciones:\n${err.message || 'Error desconocido'}`);
+        }
+    };
+    const handleVacExportSelectedPeriod = async () => {
+        setIsVacExportModalOpen(false);
+        try {
+            const svc = await import('../../../services/exports/vacationBySectionExportService');
+            await svc.generateVacationBySectionExport(startDate, endDate, operarios);
+        } catch (err: any) {
+            window.alert(`Error al generar listado de vacaciones:\n${err.message || 'Error desconocido'}`);
+        }
+    };
+
+    // --- Handlers para Exportación Horas Libres por Sección ---
+    const handleHLExportRequest = () => {
+        setHlExportMonth(startDate.slice(0, 7));
+        setIsHLExportModalOpen(true);
+    };
+    const handleHLExportFullMonth = async () => {
+        const monthSource = hlExportMonth ? `${hlExportMonth}-01` : startDate;
+        const range = getFullMonthRange(monthSource);
+        setIsHLExportModalOpen(false);
+        try {
+            const svc = await import('../../../services/exports/freeHoursBySectionExportService');
+            await svc.generateFreeHoursBySectionExport(range.startDate, range.endDate, operarios);
+        } catch (err: any) {
+            window.alert(`Error al generar listado de horas libres:\n${err.message || 'Error desconocido'}`);
+        }
+    };
+    const handleHLExportSelectedPeriod = async () => {
+        setIsHLExportModalOpen(false);
+        try {
+            const svc = await import('../../../services/exports/freeHoursBySectionExportService');
+            await svc.generateFreeHoursBySectionExport(startDate, endDate, operarios);
+        } catch (err: any) {
+            window.alert(`Error al generar listado de horas libres:\n${err.message || 'Error desconocido'}`);
+        }
     };
 
     const handleRegisterEmployee = async (employeeId: number) => {
@@ -138,6 +197,116 @@ const HrDashboardPage: React.FC = () => {
 
     const isSingleDay = startDate === endDate;
 
+    const leaveWorkConflicts = useMemo(() => {
+        const vacationByEmployee = new Map<number, Set<string>>();
+        const sickLeaveByEmployee = new Map<number, Set<string>>();
+        const workByEmployee = new Map<number, Set<string>>();
+        const sickLeaveActivityByEmployee = new Map<number, Map<string, { normalPunchCount: number; hasNonSickIncidence: boolean }>>();
+        const nameByEmployee = new Map<number, string>();
+
+        const ensureDateSet = (target: Map<number, Set<string>>, employeeId: number): Set<string> => {
+            let set = target.get(employeeId);
+            if (!set) {
+                set = new Set<string>();
+                target.set(employeeId, set);
+            }
+            return set;
+        };
+
+        const normalizeMotivo = (value: unknown): number | null => {
+            if (value === null || value === undefined || value === '') return null;
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : null;
+        };
+
+        const ensureSickDayActivity = (employeeId: number, dateKey: string) => {
+            let byDate = sickLeaveActivityByEmployee.get(employeeId);
+            if (!byDate) {
+                byDate = new Map<string, { normalPunchCount: number; hasNonSickIncidence: boolean }>();
+                sickLeaveActivityByEmployee.set(employeeId, byDate);
+            }
+
+            let stats = byDate.get(dateKey);
+            if (!stats) {
+                stats = { normalPunchCount: 0, hasNonSickIncidence: false };
+                byDate.set(dateKey, stats);
+            }
+
+            return stats;
+        };
+
+        employeeOptions.forEach(emp => {
+            nameByEmployee.set(emp.id, emp.name);
+        });
+
+        employeeCalendarsByDate?.forEach((dateMap, employeeId) => {
+            dateMap.forEach((day, rawDate) => {
+                const dateKey = normalizeDateKey(rawDate || day.Fecha);
+                if (!dateKey || dateKey < startDate || dateKey > endDate) return;
+                if (String(day.TipoDia) !== '2') return;
+                ensureDateSet(vacationByEmployee, employeeId).add(dateKey);
+            });
+        });
+
+        erpData.forEach(row => {
+            const employeeId = Number(row.IDOperario);
+            const dateKey = normalizeDateKey(row.Fecha);
+            if (!Number.isFinite(employeeId) || !dateKey || dateKey < startDate || dateKey > endDate) return;
+
+            if (row.DescOperario && !nameByEmployee.has(employeeId)) {
+                nameByEmployee.set(employeeId, row.DescOperario);
+            }
+
+            if (Number(row.TipoDiaEmpresa) === 2) {
+                ensureDateSet(vacationByEmployee, employeeId).add(dateKey);
+            }
+
+            const motivo = normalizeMotivo(row.MotivoAusencia);
+            if (motivo === 10 || motivo === 11) {
+                ensureDateSet(sickLeaveByEmployee, employeeId).add(dateKey);
+                return;
+            }
+
+            const isNormalPunch = motivo === null || motivo === 0 || motivo === 1;
+            if (isNormalPunch) {
+                ensureDateSet(workByEmployee, employeeId).add(dateKey);
+                ensureSickDayActivity(employeeId, dateKey).normalPunchCount += 1;
+                return;
+            }
+
+            ensureDateSet(workByEmployee, employeeId).add(dateKey);
+            ensureSickDayActivity(employeeId, dateKey).hasNonSickIncidence = true;
+        });
+
+        const employeeIds = new Set<number>();
+        const conflictsByEmployee = new Map<number, {
+            employeeId: number;
+            employeeName: string;
+            vacationDates: string[];
+            sickLeaveDates: string[];
+        }>();
+
+        workByEmployee.forEach((workDates, employeeId) => {
+            const vacationDates = Array.from(vacationByEmployee.get(employeeId) || []).filter(date => workDates.has(date)).sort();
+            const sickLeaveDates = Array.from(sickLeaveByEmployee.get(employeeId) || []).filter(date => {
+                const stats = sickLeaveActivityByEmployee.get(employeeId)?.get(date);
+                if (!stats) return false;
+                return stats.hasNonSickIncidence || stats.normalPunchCount > 1;
+            }).sort();
+            if (vacationDates.length === 0 && sickLeaveDates.length === 0) return;
+
+            employeeIds.add(employeeId);
+            conflictsByEmployee.set(employeeId, {
+                employeeId,
+                employeeName: nameByEmployee.get(employeeId) || `Operario ${employeeId}`,
+                vacationDates,
+                sickLeaveDates
+            });
+        });
+
+        return { employeeIds, conflictsByEmployee };
+    }, [employeeCalendarsByDate, employeeOptions, erpData, startDate, endDate]);
+
     const datasetBajas = useMemo(() => {
         const getPrevDate = (dateStr: string): string => {
             const d = new Date(`${dateStr}T00:00:00`);
@@ -176,9 +345,10 @@ const HrDashboardPage: React.FC = () => {
             if (!matchesTurno(row.turnoAsignado)) return false;
             const hasItHours = row.hITAT > 0 || row.hITEC > 0;
             if (!hasItHours) return false;
+            if (leaveWorkConflicts.employeeIds.has(row.operario)) return false;
             return hasValidSickLeavePunch(row.operario);
         });
-    }, [processedData, erpData, turno]);
+    }, [processedData, erpData, turno, leaveWorkConflicts]);
 
     const bajasEmployeeIds = useMemo(() => {
         return new Set(datasetBajas.map(row => row.operario));
@@ -205,6 +375,24 @@ const HrDashboardPage: React.FC = () => {
 
         return ids;
     }, [employeeCalendarsByDate, erpData, startDate, endDate]);
+
+    const vacationEmployeeIdsWithoutConflicts = useMemo(() => {
+        const ids = new Set<number>();
+        vacationEmployeeIds.forEach(employeeId => {
+            if (!leaveWorkConflicts.employeeIds.has(employeeId)) {
+                ids.add(employeeId);
+            }
+        });
+        return ids;
+    }, [vacationEmployeeIds, leaveWorkConflicts]);
+
+    const vacationExcludedEmployeeIds = useMemo(() => {
+        const ids = new Set<number>(leaveWorkConflicts.employeeIds);
+        if (isSingleDay) {
+            bajasEmployeeIds.forEach(id => ids.add(id));
+        }
+        return ids;
+    }, [leaveWorkConflicts, isSingleDay, bajasEmployeeIds]);
 
     const datasetAusenciasVisible = useMemo(() => {
         const holidaySet = new Set<string>([
@@ -244,13 +432,13 @@ const HrDashboardPage: React.FC = () => {
         return processedData
             .filter(row => matchesTurno(row.turnoAsignado))
             .filter(row => !bajasEmployeeIds.has(row.operario))
-            .filter(row => !vacationEmployeeIds.has(row.operario))
+            .filter(row => !vacationEmployeeIdsWithoutConflicts.has(row.operario))
             .filter(row => !employeesWithRows.has(row.operario))
             .map(row => ({
                 ...row,
                 absentDays: (row.absentDays && row.absentDays.length > 0) ? row.absentDays : fallbackAbsentDays
             }));
-    }, [processedData, erpData, bajasEmployeeIds, vacationEmployeeIds, startDate, endDate, companyHolidaySet, effectiveCalendarDays, turno]);
+    }, [processedData, erpData, bajasEmployeeIds, vacationEmployeeIdsWithoutConflicts, startDate, endDate, companyHolidaySet, effectiveCalendarDays, turno]);
 
     const ausenciasEmployeeIds = useMemo(() => {
         return new Set(datasetAusenciasVisible.map(row => row.operario));
@@ -262,9 +450,9 @@ const HrDashboardPage: React.FC = () => {
             if (!isSingleDay) return true;
             return !bajasEmployeeIds.has(row.operario)
                 && !ausenciasEmployeeIds.has(row.operario)
-                && !vacationEmployeeIds.has(row.operario);
+                && !vacationEmployeeIdsWithoutConflicts.has(row.operario);
         });
-    }, [datasetResumen, bajasEmployeeIds, ausenciasEmployeeIds, vacationEmployeeIds, turno, isSingleDay]);
+    }, [datasetResumen, bajasEmployeeIds, ausenciasEmployeeIds, vacationEmployeeIdsWithoutConflicts, turno, isSingleDay]);
 
     return (
         <div className="space-y-6">
@@ -323,7 +511,8 @@ const HrDashboardPage: React.FC = () => {
                     onReload={reloadFromServer}
                     isReloading={isReloading}
                     onExport={handleExportRequest}
-                    onFreeHoursExport={() => incidentManagerRef.current?.handleOpenFreeHoursModal(employeeOptions as any, computedDepartments)}
+                    onExportVacaciones={handleVacExportRequest}
+                    onExportHorasLibres={handleHLExportRequest}
                     onLateArrivalsOpen={handleOpenLateArrivals}
                     onAdjustmentModalOpen={handleOpenAdjustmentModal}
                     onFutureIncidentsOpen={() => incidentManagerRef.current?.handleOpenFutureIncidentsModal(employeeOptions as any)}
@@ -371,6 +560,42 @@ const HrDashboardPage: React.FC = () => {
                 </div>
             )}
 
+            {leaveWorkConflicts.employeeIds.size > 0 && (
+                <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-5 shadow-sm">
+                    <div className="flex items-start gap-3 mb-3">
+                        <span className="text-2xl leading-none">🚨</span>
+                        <div>
+                            <h3 className="text-base font-extrabold text-rose-900 uppercase tracking-wider">
+                                Aviso Crítico: fichajes en días de baja o vacaciones
+                            </h3>
+                            <p className="text-sm text-rose-800 mt-1">
+                                Estos empleados se han movido al resumen principal y se marcan en marrón rojizo para revisión inmediata.
+                            </p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                        {Array.from(leaveWorkConflicts.conflictsByEmployee.values())
+                            .sort((a, b) => a.employeeName.localeCompare(b.employeeName, 'es'))
+                            .map(conflict => {
+                                const labels: string[] = [];
+                                if (conflict.vacationDates.length > 0) {
+                                    labels.push(`Vacaciones: ${conflict.vacationDates.join(', ')}`);
+                                }
+                                if (conflict.sickLeaveDates.length > 0) {
+                                    labels.push(`Baja: ${conflict.sickLeaveDates.join(', ')}`);
+                                }
+
+                                return (
+                                    <div key={conflict.employeeId} className="bg-white border border-rose-200 rounded-xl px-3 py-2 text-sm">
+                                        <div className="font-bold text-rose-900">[{String(conflict.employeeId).padStart(3, '0')}] {conflict.employeeName}</div>
+                                        <div className="text-rose-700 text-xs mt-0.5">{labels.join(' | ')}</div>
+                                    </div>
+                                );
+                            })}
+                    </div>
+                </div>
+            )}
+
             {isLoading ? (
                 <div className="flex items-center justify-center h-64 bg-white rounded-2xl border border-slate-200 shadow-sm">
                     <div className="flex flex-col items-center gap-4">
@@ -412,6 +637,7 @@ const HrDashboardPage: React.FC = () => {
                         endDate={endDate}
                         isLongRange={isLongRange}
                         flexibleEmployeeIds={flexibleEmployeeIds}
+                        highlightEmployeeIds={leaveWorkConflicts.employeeIds}
                     />
                 ) : (
                     <HrDataTable
@@ -426,6 +652,7 @@ const HrDashboardPage: React.FC = () => {
                         companyHolidays={companyHolidays}
                         isLongRange={isLongRange}
                         flexibleEmployeeIds={flexibleEmployeeIds}
+                        highlightEmployeeIds={leaveWorkConflicts.employeeIds}
                     />
                 )
             )}
@@ -451,7 +678,7 @@ const HrDashboardPage: React.FC = () => {
                         startDate={startDate}
                         endDate={endDate}
                         employeeCalendarsByDate={employeeCalendarsByDate}
-                        excludedEmployeeIds={isSingleDay ? bajasEmployeeIds : undefined}
+                        excludedEmployeeIds={vacationExcludedEmployeeIds}
                         employeeOptions={employeeOptions.map(emp => ({
                             id: emp.id,
                             name: emp.name,
@@ -468,6 +695,30 @@ const HrDashboardPage: React.FC = () => {
                 onClose={() => setIsExportModalOpen(false)}
                 onExportFullMonth={handleExportFullMonth}
                 onExportSelectedPeriod={handleExportSelectedPeriod}
+            />
+
+            <ExportPeriodModal
+                isOpen={isVacExportModalOpen}
+                title="Exportar Listado de Vacaciones por Sección"
+                icon="🏖️"
+                accentColor="green"
+                exportMonth={vacExportMonth}
+                onExportMonthChange={setVacExportMonth}
+                onClose={() => setIsVacExportModalOpen(false)}
+                onExportFullMonth={handleVacExportFullMonth}
+                onExportSelectedPeriod={handleVacExportSelectedPeriod}
+            />
+
+            <ExportPeriodModal
+                isOpen={isHLExportModalOpen}
+                title="Exportar Listado de Horas Libres por Sección"
+                icon="⏰"
+                accentColor="purple"
+                exportMonth={hlExportMonth}
+                onExportMonthChange={setHlExportMonth}
+                onClose={() => setIsHLExportModalOpen(false)}
+                onExportFullMonth={handleHLExportFullMonth}
+                onExportSelectedPeriod={handleHLExportSelectedPeriod}
             />
         </div>
     );

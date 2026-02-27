@@ -44,6 +44,8 @@ export interface RawDataRow {
     Fin: string; // HH:MM
     TipoDiaEmpresa: number; // 0 for normal day, 1 for holiday
     TurnoTexto: string;
+    HoraReal?: string;
+    FechaCreacionAudi?: string;
     GeneradoPorApp?: boolean; // Flag to identify synthetic punches persisted in Firestore
 }
 

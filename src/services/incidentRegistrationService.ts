@@ -61,6 +61,16 @@ export interface IncidentContext {
     hasExit: boolean;
 }
 
+function addDaysLocal(dateStr: string, days: number): string {
+    const d = new Date(`${dateStr}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return dateStr;
+    d.setDate(d.getDate() + days);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
 /**
  * Calcula las horas intermedias para fichajes sintéticos
  */
@@ -171,6 +181,14 @@ export function generateIntermediatePunches(params: IntermediatePunchesParams): 
 export function generateFullDayPunches(params: FullDayPunchesParams): SyntheticPunch[] {
     const { employeeId, employeeName, date, shiftStart, shiftEnd, motivo, motivoDesc, turno, department } = params;
 
+    const toMinutes = (hhmm: string): number => {
+        const [h, m] = hhmm.split(':').map(Number);
+        return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+    };
+
+    const isCrossMidnight = toMinutes(shiftEnd) < toMinutes(shiftStart);
+    const exitDate = isCrossMidnight ? addDaysLocal(date, 1) : date;
+
     const entryPunch: SyntheticPunch = {
         IDOperario: employeeId,
         DescOperario: employeeName,
@@ -188,7 +206,7 @@ export function generateFullDayPunches(params: FullDayPunchesParams): SyntheticP
     const exitPunch: SyntheticPunch = {
         IDOperario: employeeId,
         DescOperario: employeeName,
-        Fecha: date,
+        Fecha: exitDate,
         Hora: `${shiftEnd}:00`,
         Entrada: 0,
         MotivoAusencia: motivo,

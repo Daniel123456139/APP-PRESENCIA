@@ -105,6 +105,20 @@ export const generateProcessedData = (
         return null;
     };
 
+    const resolveEffectiveHour = (row: RawDataRow, employeeId: number): string => {
+        const rawHour = normalizeTimeStrWithSeconds(row.Hora);
+        const isFlexible = userMap.get(employeeId)?.flexible === true;
+
+        if (!isFlexible) {
+            return rawHour;
+        }
+
+        const realHour = normalizeTimeStrWithSeconds(row.HoraReal);
+        if (realHour !== '00:00:00') return realHour;
+
+        return rawHour;
+    };
+
     // 1. Group by Employee
     const dataByEmployee = new Map<number, RawDataRow[]>();
     const sliceFestiveFlags = new Map<number, boolean[]>(); // Stores isFestive flag for each timeSlice index
@@ -113,15 +127,20 @@ export const generateProcessedData = (
         const row = rawData[i];
         const rowId = Number(row.IDOperario);
         if (EXCLUDE_EMPLOYEE_IDS.has(rowId)) continue;
-        const rowDate = normalizeDateStr(row.Fecha);
+        const rowForProcessing: RawDataRow = {
+            ...row,
+            Hora: resolveEffectiveHour(row, rowId)
+        };
+
+        const rowDate = normalizeDateStr(rowForProcessing.Fecha);
 
         if (rowDate < rangeStartDateStrExtended) continue;
         if (rowDate > rangeEndDateStrExtended) continue;
 
-        if (row.TipoDiaEmpresa !== undefined && row.TipoDiaEmpresa !== null) {
-            const rawTipo = typeof row.TipoDiaEmpresa === 'string'
-                ? parseInt(row.TipoDiaEmpresa, 10)
-                : row.TipoDiaEmpresa;
+        if (rowForProcessing.TipoDiaEmpresa !== undefined && rowForProcessing.TipoDiaEmpresa !== null) {
+            const rawTipo = typeof rowForProcessing.TipoDiaEmpresa === 'string'
+                ? parseInt(rowForProcessing.TipoDiaEmpresa, 10)
+                : rowForProcessing.TipoDiaEmpresa;
             if (!Number.isNaN(rawTipo)) {
                 let empTipoMap = employeeTipoDiaMap.get(rowId);
                 if (!empTipoMap) {
@@ -137,8 +156,8 @@ export const generateProcessedData = (
         // STRICT TIME FILTER:
         // Ignore ENTRIES that occur strictly AFTER the analysis end time.
         // Exits are allowed to pass to complete ongoing shifts (e.g. night shift ending at 06:00 when filter ends at 02:00).
-        if (analysisRange && isEntrada(row.Entrada)) {
-            const rowDateTime = parseDateTime(normalizeDateStr(row.Fecha), normalizeTimeStr(row.Hora));
+        if (analysisRange && isEntrada(rowForProcessing.Entrada)) {
+            const rowDateTime = parseDateTime(normalizeDateStr(rowForProcessing.Fecha), normalizeTimeStr(rowForProcessing.Hora));
             if (rowDateTime > analysisEnd) continue;
         }
 
@@ -147,7 +166,7 @@ export const generateProcessedData = (
             rows = [];
             dataByEmployee.set(rowId, rows);
         }
-        rows.push(row);
+        rows.push(rowForProcessing);
     }
 
 
@@ -308,6 +327,20 @@ export const generateProcessedData = (
             return overlapEnd > overlapStart ? (overlapEnd - overlapStart) : 0;
         };
 
+        const isFridayTurnoTardeCarryOver = (segmentStart: Date): boolean => {
+            // Regla negocio: extras del viernes turno tarde que pasan a madrugada
+            // se computan como nocturnas, no como festivas.
+            if (segmentStart.getDay() !== 6) return false; // Sabado
+            if (segmentStart.getHours() >= 6) return false; // Solo madrugada 00:00-05:59
+
+            const prev = new Date(segmentStart);
+            prev.setDate(prev.getDate() - 1);
+            const prevDateKey = toISODateLocal(prev);
+            const prevShift = dailyShiftMap.get(prevDateKey);
+
+            return prevShift === 'TN' || prevShift === 'T';
+        };
+
 
         // ...
 
@@ -433,12 +466,14 @@ export const generateProcessedData = (
                     const nextFinStr = normalizeTimeStr(nextRow.Fin || '');
                     const hasAbsenceRange = nextInicioStr && nextFinStr && nextInicioStr !== '00:00' && nextFinStr !== '00:00';
                     const nextMotivo = getMotivoAusencia(nextRow.MotivoAusencia);
+                    const isAbsenceExitWithReason = isAbsenceExitRow(nextRow);
+                    const isRangeAnchoredToCurrentPair = hasAbsenceRange &&
+                        isTimeNearMinutes(currentHoraStr, nextInicioStr, 1) &&
+                        isTimeNearMinutes(normalizeTimeStr(nextRow.Hora), nextFinStr, 1);
                     const isManualTajRange = nextMotivo === 14 && hasAbsenceRange &&
                         isTimeNearMinutes(currentHoraStr, nextInicioStr, 1) &&
                         isTimeNearMinutes(normalizeTimeStr(nextRow.Hora), nextFinStr, 1);
-                    const isSyntheticAbsencePair = (isAbsenceExitRow(nextRow) && hasAbsenceRange &&
-                        isTimeNearMinutes(currentHoraStr, nextInicioStr, 1) &&
-                        isTimeNearMinutes(normalizeTimeStr(nextRow.Hora), nextFinStr, 1)) || isManualTajRange;
+                    const isSyntheticAbsencePair = (isAbsenceExitWithReason && isRangeAnchoredToCurrentPair) || isManualTajRange;
 
                     if (endTime > currentDateObj) {
                         let effectiveStart = currentDateObj;
@@ -485,18 +520,49 @@ export const generateProcessedData = (
                         const durationMs = effectiveEnd.getTime() - effectiveStart.getTime();
                         let durationHours = durationMs / 3600000;
 
-                        // CRITICAL FIX: Detectar si es un par de justificación (Entrada -> SalidaConMotivo)
-                        // Si es así, sumar a acumuladores de justificación y NO a horas de trabajo (horasDia/timeSlices)
-                        const isJustifiedPair = isAbsenceExitRow(nextRow) || isManualTajRange;
                         const isJustifiedExit = nextMotivo !== null && nextMotivo !== 0 && nextMotivo !== 1;
+                        const isSyntheticTajPair =
+                            nextMotivo === 14 &&
+                            (currentRow.GeneradoPorApp === true || nextRow.GeneradoPorApp === true);
+                        const isJustifiedPair = isManualTajRange ||
+                            isSyntheticTajPair ||
+                            (isAbsenceExitWithReason && nextMotivo !== 14 && (!hasAbsenceRange || isRangeAnchoredToCurrentPair));
 
-                        if (isJustifiedExit && durationHours > 0) {
-                            const endIsNextDay = endTime.getDate() !== currentDateObj.getDate();
+                        let justifiedHours = durationHours;
+                        let justifiedStart = extractTimeHHMM(currentRow.Hora);
+                        let justifiedEnd = extractTimeHHMM(nextRow.Hora);
+                        let justifiedEndIsNextDay = endTime.getDate() !== currentDateObj.getDate();
+
+                        if (isJustifiedExit && hasAbsenceRange) {
+                            const rangeStartMin = toMinutes(nextInicioStr);
+                            let rangeEndMin = toMinutes(nextFinStr);
+                            let rangeEndsNextDay = false;
+
+                            if (rangeEndMin < rangeStartMin) {
+                                rangeEndMin += 1440;
+                                rangeEndsNextDay = true;
+                            }
+
+                            const rangeMinutes = nextMotivo === 14
+                                ? Math.max(0, rangeEndMin - rangeStartMin)
+                                : clampToShiftMinutes(
+                                    rangeStartMin,
+                                    rangeEndMin,
+                                    getShiftBoundsMinutes(currentShiftCode).start,
+                                    getShiftBoundsMinutes(currentShiftCode).end
+                                );
+                            justifiedHours = rangeMinutes / 60;
+                            justifiedStart = nextInicioStr;
+                            justifiedEnd = nextFinStr;
+                            justifiedEndIsNextDay = rangeEndsNextDay;
+                        }
+
+                        if (isJustifiedExit && justifiedHours > 0) {
                             employee.justifiedIntervals.push({
                                 date: currentDateStr,
-                                start: extractTimeHHMM(currentRow.Hora),
-                                end: extractTimeHHMM(nextRow.Hora),
-                                endIsNextDay,
+                                start: justifiedStart,
+                                end: justifiedEnd,
+                                endIsNextDay: justifiedEndIsNextDay,
                                 motivoId: Number(nextMotivo),
                                 motivoDesc: nextRow.DescMotivoAusencia || undefined,
                                 source: 'punch',
@@ -504,28 +570,31 @@ export const generateProcessedData = (
                             });
                         }
 
-                        if (isJustifiedPair && durationHours > 0) {
+                        const shouldAccumulateJustified =
+                            ((nextMotivo !== null && nextMotivo !== 0 && nextMotivo !== 1 && nextMotivo !== 14) || isManualTajRange);
+
+                        if (shouldAccumulateJustified && justifiedHours > 0) {
                             const ma = nextMotivo;
-                            if (ma === 2) employee.hMedico += durationHours;
-                            else if (ma === 3) employee.asOficiales += durationHours;
-                            else if (ma === 4) employee.asPropios += durationHours;
-                            else if (ma === 5) employee.hVacaciones += (durationHours / 8);
-                            else if (ma === 6) employee.hEspecialistaAccidente += durationHours;
-                            else if (ma === 7) employee.hLDisp += durationHours;
+                            if (ma === 2) employee.hMedico += justifiedHours;
+                            else if (ma === 3) employee.asOficiales += justifiedHours;
+                            else if (ma === 4) employee.asPropios += justifiedHours;
+                            else if (ma === 5) employee.hVacaciones += (justifiedHours / 8);
+                            else if (ma === 6) employee.hEspecialistaAccidente += justifiedHours;
+                            else if (ma === 7) employee.hLDisp += justifiedHours;
                             else if (ma === 8) {
                                 if (nextRow.DescMotivoAusencia && nextRow.DescMotivoAusencia.toUpperCase().includes('ANTERIOR')) {
-                                    employee.hVacAnt += (durationHours / 8);
+                                    employee.hVacAnt += (justifiedHours / 8);
                                 } else {
-                                    employee.hVacaciones += (durationHours / 8);
+                                    employee.hVacaciones += (justifiedHours / 8);
                                 }
                             }
-                            else if (ma === 9) employee.hSindicales += durationHours;
-                            else if (ma === 10) employee.hITAT += durationHours;
-                            else if (ma === 11) employee.hITEC += durationHours;
-                            else if (ma === 13) employee.hLeyFam += durationHours;
+                            else if (ma === 9) employee.hSindicales += justifiedHours;
+                            else if (ma === 10) employee.hITAT += justifiedHours;
+                            else if (ma === 11) employee.hITEC += justifiedHours;
+                            else if (ma === 13) employee.hLeyFam += justifiedHours;
                             else if (ma === 14) {
                                 // NEW: Manual TAJ Recording (Incidencia 14 insertada a mano)
-                                employee.hTAJ += durationHours;
+                                employee.hTAJ += justifiedHours;
 
                                 // FIX USER REQ: Si es FESTIVO, el tiempo de TAJ también se suma a FESTIVAS
                                 const dateKey = toISODateLocal(effectiveStart);
@@ -552,23 +621,24 @@ export const generateProcessedData = (
                                     ? employeeTipoDiaMap.get(employeeId)?.get(dateKey)
                                     : undefined;
 
-                                // 3. Determine Festive Status
-                                // UPDATED: Saturdays and Sundays are ALWAYS Festive 
-                                // unless Personal Calendar explicitly says 0 (Laborable)
-                                const isFestive = empCalType !== undefined
-                                    ? empCalType === 1 || (empCalType !== 0 && isWeekend)
-                                    : (isHoliday || isWeekend);
+                                const isFridayCarryOver = isFridayTurnoTardeCarryOver(effectiveStart);
+                                const isFestive = isFridayCarryOver
+                                    ? false
+                                    : (empCalType !== undefined
+                                        ? empCalType === 1 || (empCalType !== 0 && isWeekend)
+                                        : (isHoliday || isWeekend));
 
                                 if (isFestive) {
-                                    employee.festivas += durationHours;
-                                    employee.festiveTaj += durationHours;
+                                    employee.festivas += justifiedHours;
+                                    employee.festiveTaj += justifiedHours;
                                 }
                                 employee.numTAJ += 1;
                             }
 
                             // Justified time does NOT go to dailyHoursMap or timeSlices
                         }
-                        else if (!isSyntheticAbsencePair && durationHours > 0) {
+
+                        if (!isJustifiedPair && !isSyntheticAbsencePair && durationHours > 0) {
                             // FIX: Prevent Double Counting (Presence vs Justification Overlap)
                             // Restore subtraction logic to handle cases where real punches conflict with full-day incidents.
                             // Rule: Justification takes precedence. If a justification exists, work hours are reduced.
@@ -620,12 +690,12 @@ export const generateProcessedData = (
                             // 2. Check Fichaje Data Type
                             const fichajeType = employeeTipoDiaMap.get(employeeId)?.get(dateKey);
 
-                            // 3. Determine Festive Status
-                            // UPDATED: Saturdays and Sundays are ALWAYS Festive 
-                            // unless Personal Calendar explicitly says 0 (Laborable)
-                            const isFestive = empCalType !== undefined
-                                ? empCalType === 1 || (empCalType !== 0 && isWeekend)
-                                : (isHoliday || isWeekend);
+                            const isFridayCarryOver = isFridayTurnoTardeCarryOver(effectiveStart);
+                            const isFestive = isFridayCarryOver
+                                ? false
+                                : (empCalType !== undefined
+                                    ? empCalType === 1 || (empCalType !== 0 && isWeekend)
+                                    : (isHoliday || isWeekend));
 
                             // Sync flag with timeSlice pushed above
                             sliceFestiveFlags.get(employeeId)?.push(isFestive);
@@ -640,6 +710,29 @@ export const generateProcessedData = (
                                 const startMonth = effectiveStart.getMonth();
                                 const startDay = effectiveStart.getDate();
 
+                                const justificationRanges = justifications.map(j => {
+                                    const startDate = new Date(startYear, startMonth, startDay, 0, 0, 0, 0);
+                                    startDate.setMinutes(j.start);
+
+                                    const endDate = new Date(startYear, startMonth, startDay, 0, 0, 0, 0);
+                                    const endMin = j.end < j.start ? j.end + 1440 : j.end;
+                                    endDate.setMinutes(endMin);
+
+                                    return { start: startDate, end: endDate };
+                                });
+
+                                const adjustedOverlapHours = (boundStart: Date, boundEnd: Date): number => {
+                                    const rawOverlap = getOverlapHours(effectiveStart, effectiveEnd, boundStart, boundEnd);
+                                    if (rawOverlap <= 0 || justificationRanges.length === 0) return rawOverlap;
+
+                                    let justifiedOverlap = 0;
+                                    justificationRanges.forEach(r => {
+                                        justifiedOverlap += getOverlapHours(r.start, r.end, boundStart, boundEnd);
+                                    });
+
+                                    return Math.max(0, rawOverlap - justifiedOverlap);
+                                };
+
                                 // Definir límites horarios
                                 const bound00 = new Date(startYear, startMonth, startDay, 0, 0, 0);
                                 const bound06 = new Date(startYear, startMonth, startDay, 6, 0, 0);
@@ -650,8 +743,8 @@ export const generateProcessedData = (
                                 const bound06Next = new Date(startYear, startMonth, startDay + 1, 6, 0, 0);
 
                                 // Nocturnas (20:00 - 06:00)
-                                const hNocturnasMadrugada = getOverlapHours(effectiveStart, effectiveEnd, bound00, bound06);
-                                const hNocturnasNoche = getOverlapHours(effectiveStart, effectiveEnd, bound20, bound06Next);
+                                const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
+                                const hNocturnasNoche = adjustedOverlapHours(bound20, bound06Next);
                                 const totalNocturnas = hNocturnasMadrugada + hNocturnasNoche;
 
                                 employee.nocturnas += totalNocturnas;
@@ -659,22 +752,22 @@ export const generateProcessedData = (
                                 if (currentShiftCode === 'TN') {
                                     // Turno Tarde (15:00 - 23:00)
                                     // Horas Tarde = Intersección con 15:00-23:00
-                                    const hTarde = getOverlapHours(effectiveStart, effectiveEnd, bound15, bound23);
+                                    const hTarde = adjustedOverlapHours(bound15, bound23);
                                     employee.horasTarde += hTarde;
 
                                     // FIX: Si viene por la mañana (fuera de turno), acumular en Horas Dia
-                                    const hDia = getOverlapHours(effectiveStart, effectiveEnd, bound07, bound15);
+                                    const hDia = adjustedOverlapHours(bound07, bound15);
                                     employee.horasDia += hDia;
 
                                 } else {
                                     // Turno Mañana (07:00 - 15:00)
                                     // Horas Dia = Intersección con 07:00-15:00
-                                    const hDia = getOverlapHours(effectiveStart, effectiveEnd, bound07, bound15);
+                                    const hDia = adjustedOverlapHours(bound07, bound15);
                                     employee.horasDia += hDia;
 
                                     // FIX: Exceso Jornada 1 (15:00 - 20:00)
                                     // Calcular horas trabajadas en la tarde como exceso
-                                    const hExceso1 = getOverlapHours(effectiveStart, effectiveEnd, bound15, bound20);
+                                    const hExceso1 = adjustedOverlapHours(bound15, bound20);
                                     if (!employee.excesoJornada1) employee.excesoJornada1 = 0;
                                     employee.excesoJornada1 += hExceso1;
                                 }
@@ -914,7 +1007,7 @@ export const generateProcessedData = (
                             }
                         }
 
-                        if (duration > 0 && duration < 9) { // Aumentado a 9 por seguridad jornada completa
+                        if (duration > 0) {
                             employee.numTAJ++;
                             employee.hTAJ += duration;
 
@@ -926,7 +1019,8 @@ export const generateProcessedData = (
                     }
                     // ...
 
-                    i = j;
+                    // Skip the paired exit row to avoid double-processing justified incidents
+                    i = j + 1;
                 } else {
                     // Entrada huérfana (sin salida)
                     // ⚠️ NUEVA LÓGICA: Verificar si hay incidencia que justifica hasta fin de jornada
@@ -1138,6 +1232,13 @@ export const generateProcessedData = (
 
         if (shiftCounts.TN > shiftCounts.M) employee.turnoAsignado = 'TN';
         else employee.turnoAsignado = 'M';
+
+        if (employee.isFlexible) {
+            employee.unjustifiedGaps = [];
+            employee.workdayDeviations = [];
+            employee.numRetrasos = 0;
+            employee.tiempoRetrasos = 0;
+        }
 
         // 🔧 FIX: Post-proceso para turno TN con fichajes nocturnos
         // Si hay fichajes entre 00:00-06:00, pueden pertenecer al turno TN del día anterior
@@ -1401,12 +1502,13 @@ export const generateProcessedData = (
             // so the audit doesn't show 0h worked.
             // Presence is purely calculated from actual work punches (minus TAJ).
             let rawWorkHours = 0;
+            const dailyWorkedMinutes = Array.from(dailyHoursMap.values()).reduce((acc, h) => acc + Math.round(h * 60), 0);
 
             // 🔧 FIX: Empleados flexibles pueden trabajar en múltiples franjas
             if (employee.isFlexible) {
-                // Para flexibles: sumar TODAS las horas trabajadas en cualquier franja
-                // INCLUYE excesoJornada1 para capturar horas fuera de turno estándar (15:00-20:00)
-                rawWorkHours = employee.horasDia + employee.horasTarde + employee.nocturnas + employee.excesoJornada1;
+                // Para flexibles, usar el acumulado diario neto tras restar justificaciones,
+                // sin depender de buckets de turno (que pueden no cubrir todas las franjas reales).
+                rawWorkHours = toHoursRounded(dailyWorkedMinutes);
             } else if (employee.turnoAsignado === 'M') {
                 rawWorkHours = employee.horasDia;
             } else {
@@ -1415,7 +1517,9 @@ export const generateProcessedData = (
 
             // Work already excludes TAJ gaps for regular days.
             // For festive days, 'festivas' includes both work and TAJ, so we subtract 'festiveTaj'.
-            const presenceMinutes = Math.round((rawWorkHours + employee.festivas - (employee.festiveTaj || 0)) * 60);
+            const presenceMinutes = employee.isFlexible
+                ? Math.round(rawWorkHours * 60)
+                : Math.round((rawWorkHours + employee.festivas - (employee.festiveTaj || 0)) * 60);
             employee.presencia = toHoursRounded(presenceMinutes);
 
             // 4. TOTAL: Sum of Visual Components

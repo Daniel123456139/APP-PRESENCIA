@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+007 COLUMNAS TABLA PRINCIPAL
+
 # 07 - Cálculo de Columnas Principales
 
 ## Descripción General

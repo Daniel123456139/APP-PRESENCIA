@@ -2,6 +2,8 @@
 trigger: always_on
 ---
 
+0010 CALIDAD
+
 description: Lista de verificación obligatoria antes de dar cualquier tarea por finalizada. Asegura la integridad de los datos de RRHH.
 globs: ["src//*", "components//", "services/**/"]
 

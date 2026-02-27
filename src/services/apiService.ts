@@ -264,7 +264,9 @@ export const fetchFichajes = async (
                 Inicio: extractTimeHHMM(item.Inicio || ''),
                 Fin: extractTimeHHMM(item.Fin || ''),
                 TipoDiaEmpresa: typeof item.TipoDiaEmpresa === 'number' ? item.TipoDiaEmpresa : (parseInt(item.TipoDiaEmpresa as string, 10) || 0),
-                TurnoTexto: item.DescTipoTurno || item.TurnoTexto || ''
+                TurnoTexto: item.DescTipoTurno || item.TurnoTexto || '',
+                HoraReal: extractTimeHHMMSS(item.HoraReal || ''),
+                FechaCreacionAudi: item.FechaCreacionAudi || ''
             };
         });
 

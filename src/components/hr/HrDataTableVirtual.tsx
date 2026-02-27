@@ -16,10 +16,17 @@ interface HrDataTableVirtualProps {
     endDate?: string;
     isLongRange?: boolean;
     flexibleEmployeeIds?: Set<number>;
+    highlightEmployeeIds?: Set<number>;
 }
 
 // Helpers
-const getGapKey = (empId: number, date: string, start: string) => `gap-${empId}-${date}-${start}`;
+const normalizeGapBoundary = (value: string): string => {
+    if (!value) return '';
+    return value.replace(' (+1)', '').substring(0, 5);
+};
+
+const getGapKey = (empId: number, date: string, start: string, end: string) =>
+    `gap-${empId}-${date}-${normalizeGapBoundary(start)}-${normalizeGapBoundary(end)}`;
 const getDevKey = (empId: number, date: string) => `dev-${empId}-${date}`;
 
 // Sorting
@@ -117,11 +124,12 @@ interface RowProps {
     isLongRange?: boolean;
     setViewingShiftChanges?: (data: { name: string, changes: any[] } | null) => void;
     flexibleEmployeeIds?: Set<number>;
+    highlightEmployeeIds?: Set<number>;
     startDate?: string;
     endDate?: string;
 }
 
-const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmployee, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, startDate, endDate }: RowProps) => {
+const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmployee, isLongRange, setViewingShiftChanges, flexibleEmployeeIds, highlightEmployeeIds, startDate, endDate }: RowProps) => {
     const hasPendingIncidents = row.incidentCount > 0;
     const justifiedMeta = justifiedMetaByEmployee.get(row.operario);
     const justifiedCount = justifiedMeta?.count || 0;
@@ -131,14 +139,20 @@ const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmplo
     const hasMissingOut = row.missingClockOuts && row.missingClockOuts.length > 0;
 
     const isFlexible = row.isFlexible || flexibleEmployeeIds?.has(row.operario);
-    const rowClass = isFlexible
-        ? "bg-emerald-50 hover:bg-emerald-100 border-l-4 border-l-emerald-400"
-        : "hover:bg-slate-50/70 border-l-4 border-l-transparent";
+    const hasLeaveConflict = highlightEmployeeIds?.has(row.operario);
+    const rowClass = hasLeaveConflict
+        ? "bg-[#f3d7cf] hover:bg-[#ecc2b5] border-l-4 border-l-[#8b3f2f]"
+        : (isFlexible
+            ? "bg-emerald-50 hover:bg-emerald-100 border-l-4 border-l-emerald-400"
+            : "hover:bg-slate-50/70 border-l-4 border-l-transparent");
 
     return (
         <div style={style} className={`flex items-center border-b border-slate-200 text-sm h-[50px] ${rowClass}`}>
             <div className="w-24 px-4 font-medium text-slate-900 truncate font-mono">{formatEmployeeId(row.operario)}</div>
-            <div className="flex-1 px-4 truncate">{row.nombre}</div>
+            <div className="flex-1 px-4 truncate">
+                <span>{row.nombre}</span>
+                {hasLeaveConflict && <span className="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded bg-[#8b3f2f] text-white">BAJA/VAC + FICHAJE</span>}
+            </div>
             <div className="w-40 px-4">
                 {!isLongRange && <ScheduleCell row={row} />}
             </div>
@@ -202,7 +216,7 @@ const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmplo
 });
 
 
-const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, isLongRange, flexibleEmployeeIds }) => {
+const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, isLongRange, flexibleEmployeeIds, highlightEmployeeIds }) => {
     const [sortConfig, setSortConfig] = useState<{ key: SortableKeys; direction: SortDirection } | null>({ key: 'operario', direction: 'ascending' });
     const [viewingShiftChanges, setViewingShiftChanges] = useState<{ name: string, changes: any[] } | null>(null);
 
@@ -248,7 +262,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
     // Calculate augmented data with incident counts for sorting
     const augmentedData = useMemo(() => {
         return data.map(row => {
-            const pendingGaps = row.unjustifiedGaps.filter(g => !justifiedIncidentKeys.has(getGapKey(row.operario, g.date, g.start))).length;
+            const pendingGaps = row.unjustifiedGaps.filter(g => !justifiedIncidentKeys.has(getGapKey(row.operario, g.date, g.start, g.end))).length;
             const pendingDevs = row.workdayDeviations.filter(d => !justifiedIncidentKeys.has(getDevKey(row.operario, d.date))).length;
             const missingOuts = row.missingClockOuts?.length || 0;
             const absences = row.absentDays?.length || 0;
@@ -305,6 +319,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
         isLongRange?: boolean;
         setViewingShiftChanges: (data: { name: string, changes: any[] } | null) => void;
         flexibleEmployeeIds?: Set<number>;
+        highlightEmployeeIds?: Set<number>;
         startDate?: string;
         endDate?: string;
     };
@@ -317,6 +332,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
         isLongRange,
         setViewingShiftChanges,
         flexibleEmployeeIds,
+        highlightEmployeeIds,
         startDate,
         endDate
     };
@@ -333,6 +349,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                 isLongRange={itemData.isLongRange}
                 setViewingShiftChanges={itemData.setViewingShiftChanges}
                 flexibleEmployeeIds={itemData.flexibleEmployeeIds}
+                highlightEmployeeIds={itemData.highlightEmployeeIds}
                 startDate={itemData.startDate}
                 endDate={itemData.endDate}
             />

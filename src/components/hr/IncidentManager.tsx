@@ -6,7 +6,6 @@ import RecordIncidentModal from './RecordIncidentModal';
 import ManualIncidentModal, { ManualIncidentData } from './ManualIncidentModal';
 import MultipleAdjustmentModal from './MultipleAdjustmentModal';
 import LateArrivalsModal from './LateArrivalsModal';
-import FreeHoursFilterModal from './FreeHoursFilterModal';
 import FutureIncidentsModal from './FutureIncidentsModal';
 import { getMotivosAusencias, getCalendarioOperario } from '../../services/erpApi';
 import { fetchFichajes as getFichajes } from '../../services/apiService';
@@ -30,7 +29,6 @@ export interface IncidentManagerHandle {
     handleOpenManualIncident: (employee: ProcessedDataRow) => void;
     handleOpenLateArrivals: (data: ProcessedDataRow[]) => void;
     handleOpenAdjustmentModal: (data: RawDataRow[], shifts: Map<number, string>) => void;
-    handleOpenFreeHoursModal: (employees: EmployeeOption[], departments: string[]) => void;
     handleOpenFutureIncidentsModal: (employees: EmployeeOption[]) => void;
     justifiedIncidentKeys: Map<string, number>;
 }
@@ -102,10 +100,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
         return new Set(employeeOptions.filter(emp => emp.flexible).map(emp => emp.id));
     }, [employeeOptions]);
 
-    const [isFreeHoursModalOpen, setIsFreeHoursModalOpen] = useState(false);
-    const [freeHoursEmployees, setFreeHoursEmployees] = useState<EmployeeOption[]>([]);
-    const [freeHoursDepts, setFreeHoursDepts] = useState<string[]>([]);
-
     const [isFutureIncidentsModalOpen, setIsFutureIncidentsModalOpen] = useState(false);
     const [futureIncidentsEmployees, setFutureIncidentsEmployees] = useState<EmployeeOption[]>([]);
     const [motivosAusencia, setMotivosAusencia] = useState<{ id: number; desc: string }[]>([]);
@@ -150,11 +144,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
             setAdjustmentData(data);
             setAdjustmentShifts(shifts);
             setIsAdjustmentModalOpen(true);
-        },
-        handleOpenFreeHoursModal: (employees, depts) => {
-            setFreeHoursEmployees(employees);
-            setFreeHoursDepts(depts);
-            setIsFreeHoursModalOpen(true);
         },
         handleOpenFutureIncidentsModal: async (employees) => {
             setFutureIncidentsEmployees(employees);
@@ -279,6 +268,15 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
 
             } else {
                 // MANUAL FULL DAY
+                const isCrossMidnight = shift.end < shift.start;
+                const exitDate = isCrossMidnight
+                    ? (() => {
+                        const d = parseISOToLocalDate(data.date);
+                        d.setDate(d.getDate() + 1);
+                        return toISODateLocal(d);
+                    })()
+                    : data.date;
+
                 entryRow = {
                     IDOperario: selectedEmployeeForManual.operario,
                     DescOperario: selectedEmployeeForManual.nombre,
@@ -298,7 +296,7 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                 exitRow = {
                     IDOperario: selectedEmployeeForManual.operario,
                     DescOperario: selectedEmployeeForManual.nombre,
-                    Fecha: data.date,
+                    Fecha: exitDate,
                     Hora: shift.end,
                     Entrada: 0,
                     MotivoAusencia: data.reasonId,
@@ -521,18 +519,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                     isOpen={isLateModalOpen}
                     onClose={() => setIsLateModalOpen(false)}
                     data={lateArrivalData}
-                />
-            )}
-
-            {isFreeHoursModalOpen && (
-                <FreeHoursFilterModal
-                    isOpen={isFreeHoursModalOpen}
-                    onClose={() => setIsFreeHoursModalOpen(false)}
-                    onExport={(filters) => {
-                        // This usually triggers a heavy export in parent
-                    }}
-                    allEmployees={freeHoursEmployees}
-                    departments={freeHoursDepts}
                 />
             )}
 

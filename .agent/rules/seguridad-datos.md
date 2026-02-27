@@ -2,6 +2,9 @@
 trigger: always_on
 ---
 
+002 SEGURIDAD API KEYS
+
+
 escription: Protocolos de seguridad no negociables para proteger la aplicación y los datos.
 globs: ["**/*"]
 
@@ -13,7 +16,7 @@ La seguridad no es una característica, es la base.
 
 Principio de Mínimo Privilegio:
 
-Al crear consultas a Firebase/Supabase, solicita solo los campos necesarios. No hagas SELECT * si solo necesitas el nombre.
+Al crear consultas a Firebase, solicita solo los campos necesarios. No hagas SELECT * si solo necesitas el nombre.
 
 Validación de Entradas (Zero Trust):
 

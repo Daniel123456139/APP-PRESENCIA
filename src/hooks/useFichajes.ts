@@ -39,7 +39,9 @@ export const useFichajes = (startDate: string, endDate: string, startTime: strin
             return data;
         },
         enabled: !!startDate && !!endDate,
-        staleTime: 1000 * 60 * 5, // 5 minutos de frescura
+        staleTime: 1000 * 60 * 5,
+        // Requisito RRHH: sin autorecarga en el mismo periodo.
+        // Solo refresco manual o automatico al cambiar queryKey (periodo).
         refetchOnMount: false,
         refetchOnReconnect: false,
         refetchOnWindowFocus: false,
@@ -57,6 +59,103 @@ export const useFichajes = (startDate: string, endDate: string, startTime: strin
 
 export const useFichajesMutations = () => {
     const queryClient = useQueryClient();
+
+    const toMinutesSafe = (hhmm: string): number => {
+        const [h, m] = (hhmm || '').split(':').map(Number);
+        if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+        return h * 60 + m;
+    };
+
+    const normalizeEntrada = (value: RawDataRow['Entrada']): string => {
+        if (value === true || value === 1) return '1';
+        return '0';
+    };
+
+    const normalizeMotivo = (value: RawDataRow['MotivoAusencia']): string => {
+        if (value === null || value === undefined) return 'null';
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return String(parsed);
+        const asText = String(value).trim();
+        return asText || 'null';
+    };
+
+    const buildCacheKey = (row: RawDataRow): string => {
+        const employeeId = Number(row.IDOperario) || 0;
+        const dateKey = normalizeDateKey(row.Fecha || '') || String(row.Fecha || '');
+        const hourKey = extractTimeHHMMSS(row.Hora || '') || extractTimeHHMM(row.Hora || '') || '00:00:00';
+        const entryKey = normalizeEntrada(row.Entrada);
+        const motivoKey = normalizeMotivo(row.MotivoAusencia);
+        const inicioKey = extractTimeHHMM(row.Inicio || '') || '00:00';
+        const finKey = extractTimeHHMM(row.Fin || '') || '00:00';
+        return `${employeeId}|${dateKey}|${hourKey}|${entryKey}|${motivoKey}|${inicioKey}|${finKey}`;
+    };
+
+    const mergeRowsIntoCache = (currentRows: RawDataRow[] | undefined, incomingRows: RawDataRow[]): RawDataRow[] => {
+        const base = Array.isArray(currentRows) ? [...currentRows] : [];
+        const indexByKey = new Map<string, number>();
+
+        base.forEach((row, index) => {
+            indexByKey.set(buildCacheKey(row), index);
+        });
+
+        incomingRows.forEach(row => {
+            const key = buildCacheKey(row);
+            const existingIndex = indexByKey.get(key);
+
+            if (existingIndex === undefined) {
+                indexByKey.set(key, base.length);
+                base.push(row);
+                return;
+            }
+
+            const existing = base[existingIndex];
+            const existingId = Number(existing?.IDControlPresencia || 0);
+            const newId = Number(row?.IDControlPresencia || 0);
+            if (newId >= existingId) {
+                base[existingIndex] = { ...existing, ...row };
+            }
+        });
+
+        return base;
+    };
+
+    const rowMatchesQueryScope = (
+        row: RawDataRow,
+        scope?: { start?: string; end?: string; startTime?: string; endTime?: string }
+    ): boolean => {
+        if (!scope?.start || !scope?.end) return true;
+
+        const rowDate = normalizeDateKey(row.Fecha || '');
+        if (!rowDate) return false;
+        if (rowDate < scope.start || rowDate > scope.end) return false;
+
+        const rowTime = extractTimeHHMM(row.Hora || '');
+        if (!rowTime || !scope.startTime || !scope.endTime) return true;
+
+        const rowMin = toMinutesSafe(rowTime);
+        const startMin = toMinutesSafe(scope.startTime);
+        const endMin = toMinutesSafe(scope.endTime);
+
+        if (startMin <= endMin) {
+            return rowMin >= startMin && rowMin <= endMin;
+        }
+
+        return rowMin >= startMin || rowMin <= endMin;
+    };
+
+    const mergeRowsInAllFichajesQueries = (incomingRows: RawDataRow[]) => {
+        if (!incomingRows || incomingRows.length === 0) return;
+
+        const queryEntries = queryClient.getQueriesData<RawDataRow[]>({ queryKey: FICHAJES_KEYS.all });
+        queryEntries.forEach(([queryKey]) => {
+            if (!Array.isArray(queryKey)) return;
+            const maybeScope = (queryKey[1] as { start?: string; end?: string; startTime?: string; endTime?: string } | undefined);
+            const scopedRows = incomingRows.filter(row => rowMatchesQueryScope(row, maybeScope));
+            if (scopedRows.length === 0) return;
+
+            queryClient.setQueryData<RawDataRow[]>(queryKey, current => mergeRowsIntoCache(current, scopedRows));
+        });
+    };
 
     const addIncidentsMutation = useMutation({
         mutationFn: async ({ newRows, userName = "AppUser" }: { newRows: RawDataRow[], userName?: string }) => {
@@ -154,6 +253,9 @@ export const useFichajesMutations = () => {
             return { successCount, queuedCount, rowsToSave, userName };
         },
         onSuccess: (data) => {
+            // Optimistic local reflection for main table (before ERP eventual consistency)
+            mergeRowsInAllFichajesQueries(data.rowsToSave);
+
             // Invalidar para recargar datos frescos
             queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
 
@@ -300,6 +402,7 @@ export const useFichajesMutations = () => {
             return { newRows, queuedCount };
         },
         onSuccess: (data) => {
+            mergeRowsInAllFichajesQueries(data.newRows);
             queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
             AuditService.log({
                 actorId: 1,
