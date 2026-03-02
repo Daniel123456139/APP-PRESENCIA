@@ -38,7 +38,11 @@ export async function signInWithEmailPassword(email: string, password: string): 
     if (!user) throw new Error('No user returned from Firebase');
     return await fetchUserProfile(user);
   } catch (error: any) {
-    console.error("Firebase Login Error:", error);
+    logger.error("Error en el inicio de sesión de Firebase", {
+      email,
+      errorCode: error.code,
+      errorMessage: error.message
+    });
     throw new Error(mapAuthError(error.code));
   }
 }
@@ -76,7 +80,7 @@ export function subscribeToAuthChanges(callback: (user: AppAuthUser | null) => v
           const appUser = await fetchUserProfile(firebaseUser);
           callback(appUser);
         } catch (error) {
-          console.error("Error fetching user profile on state change:", error);
+          logger.error("Error al obtener el perfil de usuario durante el cambio de estado", error);
           callback(null);
         }
       } else {
@@ -90,7 +94,7 @@ export function subscribeToAuthChanges(callback: (user: AppAuthUser | null) => v
       }
     });
   } catch (error) {
-    console.error("Firebase initialization failed during subscription:", error);
+    logger.error("Fallo la inicialización de Firebase durante la suscripción de Auth", error);
     callback(null);
     return () => { };
   }

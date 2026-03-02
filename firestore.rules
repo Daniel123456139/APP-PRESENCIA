@@ -38,9 +38,6 @@ service cloud.firestore {
         : request.auth.token.role;
     }
 
-    function hasRole(role) {
-      return isAuthenticated() && userRole() == role;
-    }
     
     /**
      * Verificar si el usuario tiene al menos uno de los roles especificados
@@ -208,20 +205,8 @@ service cloud.firestore {
                                (isAuthenticated() && resource.data.autor == request.auth.token.email);
     }
     
-    // ═══════════════════════════════════════════════════════════════
-    // COLECCIÓN: EMPLOYEE_AUDIT_LOG (Historial de Cambios)
-    // ═══════════════════════════════════════════════════════════════
-    
-    match /EMPLOYEE_AUDIT_LOG/{logId} {
-      // Lectura: Solo Admin
-      allow read: if isSuperAdmin();
-      
-      // Escritura: Solo SUPER_ADMIN y sistema
-      allow create: if hasAnyRole(['SUPER_ADMIN', 'system']);
-      
-      // NO permitir actualización ni eliminación (logs inmutables)
-      allow update, delete: if false;
-    }
+    // EMPLOYEE_AUDIT_LOG: eliminada [LIMPIEZA-2026-03-02]
+    // Colección verificada vacía en consola Firebase. Sin código que la use en ninguna app.
     
     // ═══════════════════════════════════════════════════════════════
     // COLECCIÓN: EMPLOYEE_ACCESS_LOG (Registro de Accesos)
@@ -256,8 +241,8 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /BAJAS/{bajaId} {
-      // Lectura: HR y Admin (DEBUG: Relaxed to isAuthenticated for troubleshooting)
-      allow read: if isAuthenticated();
+      // Lectura: Solo RRHH y SUPER_ADMIN [FIX-SEC-001: eliminado DEBUG isAuthenticated]
+      allow read: if isHrRole();
       
       // Escritura: Solo RRHH y SUPER_ADMIN (para mover de activa a historico)
       allow write: if isHrRole();
@@ -283,8 +268,8 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /BAJAS_METADATA/{metadataId} {
-      // Lectura: Cualquier usuario autenticado (incluyendo anónimos)
-      allow read: if isAuthenticated();
+      // Lectura: Solo RRHH y SUPER_ADMIN [FIX-SEC-002: eliminado isAuthenticated abierto]
+      allow read: if isHrRole();
       
       // Escritura: Solo RRHH y SUPER_ADMIN
       allow write: if isHrRole();
@@ -295,8 +280,10 @@ service cloud.firestore {
     // ═══════════════════════════════════════════════════════════════
     
     match /APP_GENERATED_PUNCHES/{punchId} {
-      // Lectura y Escritura: Cualquier usuario autenticado (incluyendo anónimos)
-      allow read, write: if isAuthenticated();
+      // Lectura: Roles de portal [FIX-SEC-003: separado lectura/escritura]
+      allow read: if canUsePortal();
+      // Escritura: Solo RRHH y SUPER_ADMIN (únicos que generan fichajes sintéticos)
+      allow create, update, delete: if isHrRole();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -344,6 +331,19 @@ service cloud.firestore {
       allow write: if isHrRole();
     }
     
+    // ═══════════════════════════════════════════════════════════════
+    // COLECCIÓN: TRABAJOS (Partes de trabajo - APP GESTIÓN TRABAJOS)
+    // ═══════════════════════════════════════════════════════════════
+
+    match /TRABAJOS/{trabajoId} {
+      // Lectura: Roles de portal
+      allow read: if canUsePortal();
+      // Escritura: RRHH y gestores de trabajos
+      allow create, update: if hasAnyRole(['SUPER_ADMIN', 'RRHH', 'GESTOR_TRABAJOS']);
+      // Eliminación: Solo SUPER_ADMIN
+      allow delete: if isSuperAdmin();
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // REGLA POR DEFECTO: DENEGAR TODO LO DEMÁS
     // ═══════════════════════════════════════════════════════════════

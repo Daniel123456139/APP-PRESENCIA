@@ -55,7 +55,7 @@ export const SyncService = {
                 console.log("✅ Sync Queue migrated to IndexedDB");
             }
         } catch (e) {
-            console.error("Migration error", e);
+            logger.error("Error durante la migración de la cola de sincronización", e);
         }
 
         this._initialized = true;
@@ -164,7 +164,7 @@ export const SyncService = {
                 });
 
             } catch (error) {
-                console.error(`Failed to process item ${item.id} `, error);
+                logger.error(`Error al procesar elemento de la cola ${item.id}`, { error, item });
                 item.retryCount++;
                 item.status = 'failed';
                 // Update item in IDB with failed status and retryCount

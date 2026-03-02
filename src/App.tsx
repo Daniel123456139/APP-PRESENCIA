@@ -99,7 +99,7 @@ const MainRoutes: React.FC = () => {
             const saved = localStorage.getItem('incidentLog');
             return saved ? (decryptStorageData(saved) || []) : [];
         } catch (e) {
-            console.error('Error parsing incidentLog from localStorage', e);
+            logger.error('Error al analizar incidentLog desde localStorage', e);
             return [];
         }
     });
@@ -123,8 +123,14 @@ const MainRoutes: React.FC = () => {
 
     // Error Handling
     useEffect(() => {
-        if (errorFichajes) showNotification(`Error cargando fichajes: ${errorFichajes}`, 'error');
-        if (errorCalendario) showNotification(`Error cargando calendario: ${errorCalendario}`, 'warning');
+        if (errorFichajes) {
+            logger.error('Error cargando fichajes', errorFichajes);
+            showNotification(`Error cargando fichajes: ${errorFichajes}`, 'error');
+        }
+        if (errorCalendario) {
+            logger.warn('Error cargando calendario', errorCalendario);
+            showNotification(`Error cargando calendario: ${errorCalendario}`, 'warning');
+        }
     }, [errorFichajes, errorCalendario, showNotification]);
 
     useEffect(() => {

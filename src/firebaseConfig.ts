@@ -20,9 +20,7 @@ const requiredEnvVars = ['apiKey', 'authDomain', 'projectId', 'storageBucket', '
 const missingVars = requiredEnvVars.filter(key => !firebaseConfig[key as keyof typeof firebaseConfig]);
 
 if (missingVars.length > 0) {
-  logger.error("🚨 CRITICAL SECURITY: Falta configuración de Firebase en .env", `Faltan: ${missingVars.join(', ')}`);
-  console.error(`🔥 FIREBASE CONFIG ERROR: Missing environment variables: ${missingVars.join(', ')}. \nPlease create a .env file with VITE_FIREBASE_* variables.`);
-  // No throw error here to allow app to render a "Configuration Error" UI if needed, but Firestore will fail.
+  logger.critical("Falta configuración de Firebase en .env", { missingVars });
 }
 
 let app: FirebaseApp | undefined;
