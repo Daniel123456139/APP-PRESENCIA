@@ -525,10 +525,11 @@ export const generateProcessedData = (
                             if (effectiveStart < analysisStart) effectiveStart = new Date(analysisStart);
                             const allowTurnoTardeCarryOver =
                                 effectiveEnd > analysisEnd &&
-                                (currentShiftCode === 'TN' || currentShiftCode === 'T') &&
+                                (currentShiftCode === 'TN' || currentShiftCode === 'T' || currentShiftCode === 'NOCHE' || currentShiftCode === 'N') &&
                                 analysisEnd.getHours() === 23 &&
                                 analysisEnd.getMinutes() >= 59 &&
                                 effectiveStart <= analysisEnd;
+
 
                             if (!allowTurnoTardeCarryOver && effectiveEnd > analysisEnd) {
                                 effectiveEnd = new Date(analysisEnd);

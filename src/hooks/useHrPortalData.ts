@@ -60,7 +60,17 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         dataUpdatedAt,
         error: fichajesError,
         refresh: refreshErpData
-    } = useFichajes(startDate, endDate, startTime, endTime);
+    } = useFichajes(
+        startDate,
+        (() => {
+            const d = new Date(endDate);
+            d.setDate(d.getDate() + 1);
+            return d.toISOString().split('T')[0];
+        })(),
+        startTime,
+        endTime
+    );
+
 
     // 2. Cargar Bajas Médicas Activas desde Firestore
     const { data: activeSickLeavesRaw = [], refetch: refetchActiveSickLeaves } = useQuery({
