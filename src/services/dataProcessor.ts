@@ -389,11 +389,16 @@ export const generateProcessedData = (
                     // 1. Backend Source of Truth (IDTipoTurno)
                     let resolvedShift = 'UNKNOWN';
 
-                    // Comprobar ambos campos posibles
-                    if (currentRow.IDTipoTurno && currentRow.IDTipoTurno.trim() !== '') {
-                        resolvedShift = currentRow.IDTipoTurno;
-                    } else if (currentRow.TurnoTexto && currentRow.TurnoTexto !== '') {
-                        resolvedShift = currentRow.TurnoTexto;
+                    // Comprobar tanto el registro actual como todos los del día para este operario
+                    const dateRows = rowsByDate.get(currentDateStr) || [];
+                    for (const dr of dateRows) {
+                        if (dr.IDTipoTurno && dr.IDTipoTurno.trim() !== '') {
+                            resolvedShift = dr.IDTipoTurno;
+                            break;
+                        } else if (dr.TurnoTexto && dr.TurnoTexto !== '') {
+                            resolvedShift = dr.TurnoTexto;
+                            break;
+                        }
                     }
 
                     // 2. Fallback: Heurística por hora
@@ -401,8 +406,10 @@ export const generateProcessedData = (
                         resolvedShift = getShiftByTime(currentHoraStr);
                     }
 
-                    dailyShiftMap.set(currentDateStr, resolvedShift);
-                    if (resolvedShift === 'TN') shiftCounts.TN++;
+                    const normalizedShift = resolvedShift === 'T' ? 'TN' : resolvedShift;
+
+                    dailyShiftMap.set(currentDateStr, normalizedShift);
+                    if (normalizedShift === 'TN') shiftCounts.TN++;
                     else shiftCounts.M++;
                 }
 
@@ -514,7 +521,16 @@ export const generateProcessedData = (
 
                         if (analysisRange) {
                             if (effectiveStart < analysisStart) effectiveStart = new Date(analysisStart);
-                            if (effectiveEnd > analysisEnd) effectiveEnd = new Date(analysisEnd);
+                            const allowTurnoTardeCarryOver =
+                                effectiveEnd > analysisEnd &&
+                                (currentShiftCode === 'TN' || currentShiftCode === 'T') &&
+                                analysisEnd.getHours() === 23 &&
+                                analysisEnd.getMinutes() >= 59 &&
+                                effectiveStart <= analysisEnd;
+
+                            if (!allowTurnoTardeCarryOver && effectiveEnd > analysisEnd) {
+                                effectiveEnd = new Date(analysisEnd);
+                            }
                         }
 
                         const durationMs = effectiveEnd.getTime() - effectiveStart.getTime();
@@ -574,6 +590,7 @@ export const generateProcessedData = (
                             ((nextMotivo !== null && nextMotivo !== 0 && nextMotivo !== 1 && nextMotivo !== 14) || isManualTajRange);
 
                         if (shouldAccumulateJustified && justifiedHours > 0) {
+                            employee.horasJustificadas += justifiedHours;
                             const ma = nextMotivo;
                             if (ma === 2) employee.hMedico += justifiedHours;
                             else if (ma === 3) employee.asOficiales += justifiedHours;
@@ -589,8 +606,16 @@ export const generateProcessedData = (
                                 }
                             }
                             else if (ma === 9) employee.hSindicales += justifiedHours;
-                            else if (ma === 10) employee.hITAT += justifiedHours;
-                            else if (ma === 11) employee.hITEC += justifiedHours;
+                            else if (ma === 10) {
+                                employee.hITAT += justifiedHours;
+                                if (currentShiftCode === 'TN' || currentShiftCode === 'T') shiftCounts.TN++;
+                                else shiftCounts.M++;
+                            }
+                            else if (ma === 11) {
+                                employee.hITEC += justifiedHours;
+                                if (currentShiftCode === 'TN' || currentShiftCode === 'T') shiftCounts.TN++;
+                                else shiftCounts.M++;
+                            }
                             else if (ma === 13) employee.hLeyFam += justifiedHours;
                             else if (ma === 14) {
                                 // NEW: Manual TAJ Recording (Incidencia 14 insertada a mano)
@@ -742,14 +767,24 @@ export const generateProcessedData = (
                                 const bound23 = new Date(startYear, startMonth, startDay, 23, 0, 0);
                                 const bound06Next = new Date(startYear, startMonth, startDay + 1, 6, 0, 0);
 
-                                // Nocturnas (20:00 - 06:00)
-                                const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
-                                const hNocturnasNoche = adjustedOverlapHours(bound20, bound06Next);
-                                const totalNocturnas = hNocturnasMadrugada + hNocturnasNoche;
+                                let totalNocturnas = 0;
+
+                                if (currentShiftCode === 'TN' || currentShiftCode === 'T') {
+                                    // Regla negocio: en turno tarde, 20:00-23:00 cuenta como jornada.
+                                    // Solo se consideran nocturnas las horas EXTRA (23:00-07:00).
+                                    const hNocturnasExtraNoche = adjustedOverlapHours(bound23, bound06Next);
+                                    const hNocturnasExtraMadrugada = adjustedOverlapHours(bound00, bound07);
+                                    totalNocturnas = hNocturnasExtraNoche + hNocturnasExtraMadrugada;
+                                } else {
+                                    // Turno mañana: nocturnas estándar 20:00-06:00
+                                    const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
+                                    const hNocturnasNoche = adjustedOverlapHours(bound20, bound06Next);
+                                    totalNocturnas = hNocturnasMadrugada + hNocturnasNoche;
+                                }
 
                                 employee.nocturnas += totalNocturnas;
 
-                                if (currentShiftCode === 'TN') {
+                                if (currentShiftCode === 'TN' || currentShiftCode === 'T') {
                                     // Turno Tarde (15:00 - 23:00)
                                     // Horas Tarde = Intersección con 15:00-23:00
                                     const hTarde = adjustedOverlapHours(bound15, bound23);
@@ -775,9 +810,13 @@ export const generateProcessedData = (
 
 
                             // --- Retrasos (Treat as Gaps if significant) ---
-                            if (!isWeekend && !isHoliday && (dailyHoursMap.get(currentDateStr) || 0) <= durationHours) {
+                            const isFestiveForDelay = empCalType !== undefined
+                                ? empCalType === 1 || (empCalType !== 0 && isWeekend)
+                                : (isWeekend || isHoliday);
+
+                            if (!isFestiveForDelay && (dailyHoursMap.get(currentDateStr) || 0) <= durationHours) {
                                 let theoreticalStartHour = 7;
-                                if (currentShiftCode === 'TN') theoreticalStartHour = 15;
+                                if (currentShiftCode === 'TN' || currentShiftCode === 'T') theoreticalStartHour = 15;
 
                                 const theoreticalStartStr = `${theoreticalStartHour.toString().padStart(2, '0')}:00`;
                                 let isDelay = false;
@@ -1546,13 +1585,15 @@ export const generateProcessedData = (
             // Check if employee has vacations (TipoDiaEmpresa = 2) on days they also have punches
             const vacationDates = new Set<string>();
             const normalPunchDates = new Set<string>();
-            const sickLeaveDates = new Set<string>();
+            const sickLeaveDatesAT = new Set<string>();
+            const sickLeaveDatesEC = new Set<string>();
+            const sickLeaveDatesAll = new Set<string>();
 
             allRows.forEach(r => {
                 const dateKey = normalizeDateStr(r.Fecha);
                 const ma = getMotivoAusencia(r.MotivoAusencia);
 
-                if (r.TipoDiaEmpresa === 2) {
+                if (Number(r.TipoDiaEmpresa) === 2) {
                     vacationDates.add(dateKey);
                 }
 
@@ -1560,16 +1601,26 @@ export const generateProcessedData = (
                     normalPunchDates.add(dateKey);
                 }
 
-                if (ma === 10 || ma === 11) {
-                    sickLeaveDates.add(dateKey);
+                if (ma === 10) {
+                    sickLeaveDatesAT.add(dateKey);
+                    sickLeaveDatesAll.add(dateKey);
+                } else if (ma === 11) {
+                    sickLeaveDatesEC.add(dateKey);
+                    sickLeaveDatesAll.add(dateKey);
                 }
             });
+
+            employee.diasITAT = sickLeaveDatesAT.size;
+            employee.diasITEC = sickLeaveDatesEC.size;
 
             vacationDates.forEach(vDate => {
                 if (normalPunchDates.has(vDate) && !employee.vacationConflicts!.includes(vDate)) {
                     employee.vacationConflicts!.push(vDate);
                 }
             });
+
+            // Re-sync sickLeaveDates for the absent check logic below
+            const sickLeaveDates = sickLeaveDatesAll;
 
             // Sort conflicts for display
             if (employee.vacationConflicts!.length > 0) {

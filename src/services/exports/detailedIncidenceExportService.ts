@@ -919,6 +919,8 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
     const R_15_23 = { s: 15 * 60, e: 23 * 60 };  // 900 - 1380
     const R_20_07_A = { s: 20 * 60, e: 24 * 60 }; // 1200 - 1440 (Nocturnas M parte 1)
     const R_20_07_B = { s: 0, e: 7 * 60 };        // 0 - 420 (Nocturnas M parte 2)
+    const R_23_07_A = { s: 23 * 60, e: 24 * 60 }; // 1380 - 1440 (Nocturnas TN extra parte 1)
+    const R_23_07_B = { s: 0, e: 7 * 60 };        // 0 - 420 (Nocturnas TN extra parte 2)
 
     // Función intersección
     const intersect = (s1: number, e1: number, s2: number, e2: number) => {
@@ -933,10 +935,12 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
         b.nocturnas += intersect(start, end, R_20_07_A.s, R_20_07_A.e);
         b.nocturnas += intersect(start, end, R_20_07_B.s, R_20_07_B.e);
     } else {
+        // Regla negocio: para turno TN, 20:00-23:00 pertenece a jornada normal.
+        // Nocturnas solo en horas EXTRA (23:00-07:00).
         b.horasDia += intersect(start, end, R_07_15.s, R_07_15.e);
         b.horasTarde += intersect(start, end, R_15_23.s, R_15_23.e);
-        b.nocturnas += intersect(start, end, R_20_07_A.s, R_20_07_A.e);
-        b.nocturnas += intersect(start, end, R_20_07_B.s, R_20_07_B.e);
+        b.nocturnas += intersect(start, end, R_23_07_A.s, R_23_07_A.e);
+        b.nocturnas += intersect(start, end, R_23_07_B.s, R_23_07_B.e);
         // Horas Noche queda en 0 por decisión funcional actual (sin turno N activo)
     }
 
@@ -1589,6 +1593,10 @@ const calculateEmployeeRowLegacy = (
         b = addIntervalToBuckets(b, interval, shiftForDate, effectiveFestiveDates, effectiveVacationDates);
     });
 
+    if (user.flexible === true) {
+        b.excesoJornada1 = 0;
+    }
+
     const tajAudit = auditUnpairedPunches(workRows, () => true, 14);
     if (tajAudit.unmatchedExits > 0) {
         console.warn(
@@ -1651,12 +1659,15 @@ const calculateEmployeeRowLegacy = (
     const numTAJ = countIncidents(empRawPeriod, 14, inPeriod);
     const hTAJ = hTAJFromIntervals;
 
-    const retrasos = calcularRetrasos(
-        empRawPeriod,
-        (date) => dailyShiftMap.get(date) || userShift,
-        periodStart,
-        periodEnd
-    );
+    const retrasos = user.flexible === true
+        ? { num: 0, tiempo: 0 }
+        : calcularRetrasos(
+            empRawPeriod,
+            (date) => dailyShiftMap.get(date) || userShift,
+            periodStart,
+            periodEnd,
+            effectiveFestiveDates
+        );
     const numRetrasos = retrasos.num;
     const tiempoRetrasos = retrasos.tiempo;
 
@@ -1739,7 +1750,8 @@ const calcularRetrasos = (
     rows: RawDataRow[],
     getShiftForDate: (date: string) => 'M' | 'TN',
     startDate: string,
-    endDate: string
+    endDate: string,
+    festiveDates?: Set<string>
 ): { num: number; tiempo: number } => {
     const margenMin = 1 + 59 / 60; // 1min 59seg en minutos decimales
 
@@ -1760,6 +1772,9 @@ const calcularRetrasos = (
 
     // Analizar cada día
     for (const [fecha, fichs] of porDia) {
+        const isFestive = (festiveDates?.has(fecha) ?? false) || isWeekend(fecha);
+        if (isFestive) continue;
+
         const turnoDia = getShiftForDate(fecha);
         const horaEsperada = turnoDia === 'M' ? 7 * 60 : 15 * 60;
 

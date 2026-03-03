@@ -36,7 +36,6 @@ export interface IncidentManagerHandle {
 interface IncidentManagerProps {
     erpData: RawDataRow[];
     employeeOptions: EmployeeOption[];
-    onRefreshNeeded: () => void;
     setIncidentLog: React.Dispatch<React.SetStateAction<IncidentLogEntry[]>>;
     startDate: string;
     endDate: string;
@@ -46,7 +45,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
     const {
         erpData,
         employeeOptions,
-        onRefreshNeeded,
         setIncidentLog,
         startDate,
         endDate
@@ -341,7 +339,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
             }
 
             showNotification(`Incidencia manual registrada: ${desc}`, "success");
-            onRefreshNeeded();
 
         } catch (error: unknown) {
             if (error instanceof Error) {
@@ -447,8 +444,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                 showNotification(strategyResult.description, "success");
                 // logIncident(employee, reason.id, reason.desc, type === 'gap' ? 'Justificación Hueco' : 'Ausencia Completa', strategyResult.description);
             }
-
-            onRefreshNeeded();
             if (didSave) {
                 const key = getIncidentKey(incident, employee);
                 setJustifiedIncidentKeys(prev => {
@@ -505,7 +500,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                             const old = adjustmentData.filter(a => changed.some(c => c.IDControlPresencia === a.IDControlPresencia));
                             await updateRows({ oldRows: old, newRows: changed });
                             showNotification(`${changed.length} fichajes actualizados`, 'success');
-                            onRefreshNeeded();
                         }
                         setIsAdjustmentModalOpen(false);
                     }}
@@ -666,7 +660,6 @@ const IncidentManager = forwardRef<IncidentManagerHandle, IncidentManagerProps>(
                             const weekendMsg = skippedWeekendDates > 0 ? ` (${skippedWeekendDates} fin(es) de semana omitido(s))` : '';
                             showNotification(`✅ Incidencias futuras registradas: ${laborableDates.length} día(s) para ${employeeName}${weekendMsg}`, 'success');
                             console.log(`✅ [FUTURE INCIDENTS] ${allIncidents.length} fichajes creados correctamente`);
-                            onRefreshNeeded();
                         } catch (error: unknown) {
                             if (error instanceof Error) {
                                 console.error('❌ [FUTURE INCIDENTS] Error:', error.message);

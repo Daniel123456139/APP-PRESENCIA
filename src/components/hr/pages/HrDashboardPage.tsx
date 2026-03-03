@@ -308,45 +308,20 @@ const HrDashboardPage: React.FC = () => {
     }, [employeeCalendarsByDate, employeeOptions, erpData, startDate, endDate]);
 
     const datasetBajas = useMemo(() => {
-        const getPrevDate = (dateStr: string): string => {
-            const d = new Date(`${dateStr}T00:00:00`);
-            d.setDate(d.getDate() - 1);
-            return toISODateLocal(d);
-        };
-
-        const toNumber = (value: unknown): number | null => {
-            if (value === null || value === undefined || value === '') return null;
-            const n = Number(value);
-            return Number.isFinite(n) ? n : null;
-        };
-
-        const hasValidSickLeavePunch = (employeeId: number): boolean => {
-            const employeeRows = erpData.filter(r => Number(r.IDOperario) === employeeId);
-            if (employeeRows.length === 0) return false;
-
-            const entryDates = new Set(
-                employeeRows
-                    .filter(r => Number(r.Entrada) === 1)
-                    .map(r => normalizeDateKey(r.Fecha))
-            );
-
-            return employeeRows.some(r => {
-                if (Number(r.Entrada) !== 0) return false;
-                const motivo = toNumber(r.MotivoAusencia);
-                if (motivo !== 10 && motivo !== 11) return false;
-
-                const exitDate = normalizeDateKey(r.Fecha);
-                const prevDate = getPrevDate(exitDate);
-                return entryDates.has(exitDate) || entryDates.has(prevDate);
-            });
-        };
+        const bajasOperarios = new Set<number>();
+        erpData.forEach(r => {
+            const motivo = Number(r.MotivoAusencia);
+            if (motivo === 10 || motivo === 11) {
+                bajasOperarios.add(Number(r.IDOperario));
+            }
+        });
 
         return processedData.filter(row => {
-            if (!matchesTurno(row.turnoAsignado)) return false;
-            const hasItHours = row.hITAT > 0 || row.hITEC > 0;
-            if (!hasItHours) return false;
-            if (leaveWorkConflicts.employeeIds.has(row.operario)) return false;
-            return hasValidSickLeavePunch(row.operario);
+            const isInBajas = (row.hITAT > 0 || row.hITEC > 0) || bajasOperarios.has(row.operario);
+            if (!isInBajas) return false;
+
+            // Si está en bajas, verificamos que el turno coincida con el filtro
+            return matchesTurno(row.turnoAsignado);
         });
     }, [processedData, erpData, turno, leaveWorkConflicts]);
 
@@ -434,6 +409,7 @@ const HrDashboardPage: React.FC = () => {
             .filter(row => !bajasEmployeeIds.has(row.operario))
             .filter(row => !vacationEmployeeIdsWithoutConflicts.has(row.operario))
             .filter(row => !employeesWithRows.has(row.operario))
+            .filter(row => !leaveWorkConflicts.employeeIds.has(row.operario)) // Evitar duplicados si hay conflicto
             .map(row => ({
                 ...row,
                 absentDays: (row.absentDays && row.absentDays.length > 0) ? row.absentDays : fallbackAbsentDays

@@ -90,9 +90,15 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
             const minute = parseInt(mStr, 10);
             const rowTimeMinutes = hour * 60 + minute;
 
+            const motivoValue = row.MotivoAusencia;
+            const motivo = motivoValue === null || motivoValue === undefined
+                ? null
+                : Number(motivoValue);
+            const isStandardExitMotivo = motivo === null || Number.isNaN(motivo) || motivo === 0 || motivo === 1;
+
             // Determine if it's Entry or Exit based on data
             const isEntry = row.Entrada === 1; // Explicitly 1
-            const isExit = row.MotivoAusencia === 1; // Standard clock out code
+            const isExit = (row.Entrada === 0 || row.Entrada === false) && isStandardExitMotivo;
 
             if (!isEntry && !isExit) return;
 
@@ -136,7 +142,7 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
             const assignedShift = employeeShifts?.get(row.IDOperario);
             if (assignedShift) {
                 isMorning = assignedShift === 'M';
-                isAfternoon = assignedShift === 'TN';
+                isAfternoon = assignedShift === 'TN' || assignedShift === 'T';
             } else if (row.TurnoTexto) {
                 const s = row.TurnoTexto.toUpperCase();
                 isMorning = s === 'M' || s.startsWith('M');
@@ -169,22 +175,25 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
                         });
                     }
                 } else if (isExit) {
-                    // End 15:00. Window [15:01 - 15:15]. (15 min después)
-                    // ⚠️ CRITICAL FIX: Solo ajustar si salió DESPUÉS de las 15:00
-                    // Si salió a las 14:50, NO ajustar (es salida anticipada real)
-                    if (rowTimeMinutes > toMinutes(15, 0) && rowTimeMinutes <= toMinutes(15, 15)) {
-                        results.push({
-                            originalRow: row,
-                            originalIndex: index,
-                            targetTime: '15:00:00',
-                            type: 'Salida'
-                        });
+                    // End M: aplicar redondeo también a 16:00 y 17:00
+                    // misma lógica que 15:00: ventana (xx:01 - xx:15)
+                    const morningExitTargets = [15, 16, 17];
+
+                    for (const targetHour of morningExitTargets) {
+                        if (rowTimeMinutes > toMinutes(targetHour, 0) && rowTimeMinutes <= toMinutes(targetHour, 15)) {
+                            results.push({
+                                originalRow: row,
+                                originalIndex: index,
+                                targetTime: `${String(targetHour).padStart(2, '0')}:00:00`,
+                                type: 'Salida'
+                            });
+                            break;
+                        }
                     }
                 }
             } else if (isAfternoon) {
                 if (isEntry) {
-                    // Start 15:00. Window [14:15 - 14:59]. (45 min antes)
-                    // ⚠️ CRITICAL FIX: Solo ajustar si llegó ANTES de las 15:00
+                    // Start T
                     if (rowTimeMinutes >= toMinutes(14, 15) && rowTimeMinutes < toMinutes(15, 0)) {
                         results.push({
                             originalRow: row,
@@ -210,7 +219,7 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
         });
 
         return results;
-    }, [data, employeeShifts]);
+    }, [data, employeeShifts, flexibleEmployeeIds]);
 
     // Select all by default when candidates change
     useEffect(() => {

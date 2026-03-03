@@ -31,15 +31,15 @@ export const useFichajes = (startDate: string, endDate: string, startTime: strin
             const t0 = performance.now();
             if (rangeDays > 7) {
                 const data = await fetchFichajesBatched(startDate, endDate, '', startTime, endTime);
-                trackPerfMetric('fetch_fichajes_batched', performance.now() - t0, { rangeDays, rows: data.length });
+                trackPerfMetric('fetch_fichajes_batched', performance.now() - t0, { rangeDays, rows: data.length, mode: 'exact_with_time' });
                 return data;
             }
             const data = await fetchFichajes(startDate, endDate, '', startTime, endTime);
-            trackPerfMetric('fetch_fichajes', performance.now() - t0, { rangeDays, rows: data.length });
+            trackPerfMetric('fetch_fichajes', performance.now() - t0, { rangeDays, rows: data.length, mode: 'exact_with_time' });
             return data;
         },
         enabled: !!startDate && !!endDate,
-        staleTime: 1000 * 60 * 5,
+        staleTime: 0,
         // Requisito RRHH: sin autorecarga en el mismo periodo.
         // Solo refresco manual o automatico al cambiar queryKey (periodo).
         refetchOnMount: false,
@@ -140,7 +140,13 @@ export const useFichajesMutations = () => {
             return rowMin >= startMin && rowMin <= endMin;
         }
 
-        return rowMin >= startMin || rowMin <= endMin;
+        if (scope.start === scope.end) {
+            return rowMin >= startMin || rowMin <= endMin;
+        }
+
+        if (rowDate === scope.start) return rowMin >= startMin;
+        if (rowDate === scope.end) return rowMin <= endMin;
+        return true;
     };
 
     const mergeRowsInAllFichajesQueries = (incomingRows: RawDataRow[]) => {
@@ -154,6 +160,23 @@ export const useFichajesMutations = () => {
             if (scopedRows.length === 0) return;
 
             queryClient.setQueryData<RawDataRow[]>(queryKey, current => mergeRowsIntoCache(current, scopedRows));
+        });
+    };
+
+    const removeRowsFromAllFichajesQueries = (predicate: (row: RawDataRow) => boolean) => {
+        const queryEntries = queryClient.getQueriesData<RawDataRow[]>({ queryKey: FICHAJES_KEYS.all });
+        queryEntries.forEach(([queryKey]) => {
+            queryClient.setQueryData<RawDataRow[]>(queryKey, current => {
+                if (!Array.isArray(current) || current.length === 0) return current || [];
+                return current.filter(row => !predicate(row));
+            });
+        });
+    };
+
+    const invalidateFichajesWithoutRefetch = () => {
+        queryClient.invalidateQueries({
+            queryKey: FICHAJES_KEYS.all,
+            refetchType: 'none'
         });
     };
 
@@ -256,8 +279,8 @@ export const useFichajesMutations = () => {
             // Optimistic local reflection for main table (before ERP eventual consistency)
             mergeRowsInAllFichajesQueries(data.rowsToSave);
 
-            // Invalidar para recargar datos frescos
-            queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
+            // Marcar stale sin recarga automatica
+            invalidateFichajesWithoutRefetch();
 
             if (data.rowsToSave.length > 0) {
                 const first = data.rowsToSave[0];
@@ -297,7 +320,22 @@ export const useFichajesMutations = () => {
             return { result, range, userName };
         },
         onSuccess: (data) => {
-            queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
+            const targetEmployee = Number(data.range.employeeId);
+            const start = data.range.startDate;
+            const end = data.range.endDate;
+            const targetMotivo = Number(data.range.motivoId);
+
+            removeRowsFromAllFichajesQueries(row => {
+                const rowEmployee = Number(row.IDOperario);
+                if (rowEmployee !== targetEmployee) return false;
+
+                const rowDate = normalizeDateKey(row.Fecha || '');
+                if (!rowDate || rowDate < start || rowDate > end) return false;
+
+                return Number(row.MotivoAusencia) === targetMotivo;
+            });
+
+            invalidateFichajesWithoutRefetch();
             AuditService.log({
                 actorId: 1,
                 actorName: data.userName,
@@ -350,7 +388,7 @@ export const useFichajesMutations = () => {
             // Pero dado que estamos migrando, vamos a hacer que editLeaveRange llame a `addIncidentsMutation.mutateAsync` NO se puede.
 
             // Vamos a dejar editLeaveRange en el limbo por un segundo y refactorizar `addIncidentsCore`
-            queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
+            invalidateFichajesWithoutRefetch();
         }
     });
 
@@ -403,7 +441,7 @@ export const useFichajesMutations = () => {
         },
         onSuccess: (data) => {
             mergeRowsInAllFichajesQueries(data.newRows);
-            queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
+            invalidateFichajesWithoutRefetch();
             AuditService.log({
                 actorId: 1,
                 actorName: 'RRHH',
@@ -423,7 +461,7 @@ export const useFichajesMutations = () => {
         },
         onSuccess: (data) => {
             // Invalida tanto fichajes como el estado de calendarios si existiera una query de cache
-            queryClient.invalidateQueries({ queryKey: FICHAJES_KEYS.all });
+            invalidateFichajesWithoutRefetch();
             // Nota: useHrPortalData usa estado local para calendarios, por lo que el refresco
             // dependerá de cómo se use. Pero invalidar fichajes es un buen comienzo.
 

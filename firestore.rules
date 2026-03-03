@@ -62,15 +62,15 @@ service cloud.firestore {
     }
 
     function isSuperAdmin() {
-      return hasRole('SUPER_ADMIN');
+      return hasAnyRole(['SUPER_ADMIN', 'super_admin', 'admin', 'ADMIN']);
     }
 
     function isHrRole() {
-      return hasAnyRole(['SUPER_ADMIN', 'RRHH']);
+      return hasAnyRole(['SUPER_ADMIN', 'super_admin', 'admin', 'ADMIN', 'RRHH', 'rrhh', 'HR', 'hr']);
     }
 
     function canUsePortal() {
-      return hasAnyRole(['SUPER_ADMIN', 'RRHH', 'OPERADOR', 'GESTOR_TRABAJOS']);
+      return hasAnyRole(['SUPER_ADMIN', 'super_admin', 'admin', 'ADMIN', 'RRHH', 'rrhh', 'HR', 'hr', 'OPERADOR', 'GESTOR_TRABAJOS']);
     }
 
     function canReadTalento() {

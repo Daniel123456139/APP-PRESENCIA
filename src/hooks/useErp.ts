@@ -19,6 +19,9 @@ export const useMotivos = () => {
         queryKey: ERP_KEYS.motivos,
         queryFn: getMotivosAusencias,
         staleTime: 1000 * 60 * 60 * 24, // 24 horas (datos maestros muy estáticos)
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     return {
@@ -45,7 +48,8 @@ export const useOperarios = (onlyActive = true) => {
                     .map((doc) => {
                         const data = doc.data();
                         const idRaw = data.IDOperario ?? doc.id;
-                        const idNum = parseInt(String(idRaw), 10);
+                        const numericStr = String(idRaw).replace(/\D/g, '');
+                        const idNum = parseInt(numericStr, 10);
 
                         if (Number.isNaN(idNum)) return null;
 
@@ -69,6 +73,9 @@ export const useOperarios = (onlyActive = true) => {
             }
         },
         staleTime: 1000 * 60 * 5, // 5 minutos
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     const filteredOperarios = useMemo(() => {
@@ -95,6 +102,9 @@ export const useCalendario = (startDate: string, endDate: string) => {
         queryFn: () => getCalendarioEmpresa(startDate, endDate),
         enabled: !!startDate && !!endDate,
         staleTime: 1000 * 60 * 10, // 10 minutos
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     return {

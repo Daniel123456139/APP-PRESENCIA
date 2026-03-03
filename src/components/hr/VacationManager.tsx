@@ -1,18 +1,19 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { LeaveRange, User, Role } from '../../types';
 import { groupRawDataToLeaves } from '../../services/leaveService';
 import EditLeaveModal from './EditLeaveModal';
 import { useNotification } from '../shared/NotificationContext';
 import { SvgIcon } from '../shared/Nav';
 import { toISODateLocal, parseISOToLocalDate } from '../../utils/localDate';
-import { Operario, CalendarioDia } from '../../services/erpApi';
+import { Operario, CalendarioDia, getCalendarioOperario } from '../../services/erpApi';
 import { exportVacationManagementToXlsx } from '../../services/vacationManagementExportService';
 import AdvancedEmployeeFilter from '../shared/AdvancedEmployeeFilter';
 import { useHrLayout } from './HrLayout';
 import { useFichajesMutations } from '../../hooks/useFichajes';
 import EmployeeSelect from '../shared/EmployeeSelect';
 import SmartDateInput from '../shared/SmartDateInput';
+import { normalizeDateKey } from '../../utils/datetime';
 
 const DAYS_OF_WEEK = ['D', 'L', 'M', 'X', 'J', 'V', 'S'];
 
@@ -28,7 +29,8 @@ const VacationManager: React.FC = () => {
         employeeCalendarsByDate,
         setEmployeeCalendarsByDate,
         isFetchingCalendars,
-        startDate: globalStartDate
+        startDate: globalStartDate,
+        lastUpdated
     } = useHrLayout();
 
     const { updateCalendar, editLeaveRange, deleteLeaveRange } = useFichajesMutations();
@@ -42,11 +44,104 @@ const VacationManager: React.FC = () => {
     });
 
     const [createModalEmployee, setCreateModalEmployee] = useState<Operario | null>(null);
+    const monthCalendarCacheRef = useRef<Set<string>>(new Set());
+    const [isMonthCalendarsLoading, setIsMonthCalendarsLoading] = useState(false);
+    const [monthCalendarProgress, setMonthCalendarProgress] = useState(0);
 
     // Modals
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
     const [rangeToEdit, setRangeToEdit] = useState<LeaveRange | null>(null);
+
+    const visibleMonthRange = useMemo(() => {
+        const start = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        const end = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+        return {
+            startDate: toISODateLocal(start),
+            endDate: toISODateLocal(end)
+        };
+    }, [currentDate]);
+
+    useEffect(() => {
+        monthCalendarCacheRef.current.clear();
+    }, [lastUpdated]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadVisibleMonthCalendars = async () => {
+            const ids = employeeOptions
+                .map(emp => Number(emp.id))
+                .filter(id => Number.isFinite(id));
+
+            if (ids.length === 0) return;
+
+            const { startDate, endDate } = visibleMonthRange;
+            const missingIds = ids.filter(id => !monthCalendarCacheRef.current.has(`${id}|${startDate}|${endDate}`));
+            if (missingIds.length === 0) return;
+
+            setIsMonthCalendarsLoading(true);
+            setMonthCalendarProgress(0);
+
+            const batchSize = 6;
+            const loadedRows: Array<{ id: number; cal: CalendarioDia[] }> = [];
+
+            try {
+                for (let i = 0; i < missingIds.length; i += batchSize) {
+                    if (cancelled) return;
+
+                    const batch = missingIds.slice(i, i + batchSize);
+                    const batchResults = await Promise.all(batch.map(async (id) => {
+                        try {
+                            const cal = await getCalendarioOperario(String(id), startDate, endDate);
+                            return { id, cal };
+                        } catch {
+                            return { id, cal: [] as CalendarioDia[] };
+                        }
+                    }));
+
+                    if (cancelled) return;
+
+                    loadedRows.push(...batchResults);
+                    const completed = Math.min(i + batch.length, missingIds.length);
+                    setMonthCalendarProgress(Math.round((completed / missingIds.length) * 100));
+                }
+
+                if (cancelled) return;
+
+                setEmployeeCalendarsByDate(prev => {
+                    const next = new Map(prev);
+
+                    loadedRows.forEach(({ id, cal }) => {
+                        const employeeMap = new Map(next.get(id) || []);
+
+                        cal.forEach(day => {
+                            const cleanDate = normalizeDateKey(day.Fecha || '');
+                            if (!cleanDate) return;
+                            employeeMap.set(cleanDate, { ...day, Fecha: cleanDate });
+                        });
+
+                        next.set(id, employeeMap);
+                        monthCalendarCacheRef.current.add(`${id}|${startDate}|${endDate}`);
+                    });
+
+                    return next;
+                });
+
+                setMonthCalendarProgress(100);
+            } finally {
+                if (!cancelled) {
+                    setIsMonthCalendarsLoading(false);
+                }
+            }
+        };
+
+        loadVisibleMonthCalendars();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [employeeOptions, visibleMonthRange.startDate, visibleMonthRange.endDate, setEmployeeCalendarsByDate]);
 
     // --- DATA PROCESSING ---
 
@@ -160,13 +255,15 @@ const VacationManager: React.FC = () => {
     const todayStr = toISODateLocal(new Date());
     const peopleOnVacationToday = staffingStats.find(s => s.date === todayStr)?.onVacation || 0;
     const criticalDaysCount = staffingStats.filter(s => s.percentage < 50 && new Date(s.date).getDay() !== 0 && new Date(s.date).getDay() !== 6).length;
-    const displayedMonthPrefix = toISODateLocal(currentDate).slice(0, 7);
-    const totalVacationDaysPlanned = vacationRanges.filter(r => r.startDate.startsWith(displayedMonthPrefix)).reduce((acc, curr) => {
-        const start = new Date(curr.startDate);
-        const end = new Date(curr.endDate);
-        const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24)) + 1;
-        return acc + days;
-    }, 0);
+    const totalVacationDaysPlanned = useMemo(() => {
+        return filteredEmployees.reduce((acc, emp) => {
+            const employeeDays = monthDays.reduce((dayAcc, day) => {
+                const status = getStatus(emp.id, day.dateStr);
+                return dayAcc + (status.type === 'vacation' ? 1 : 0);
+            }, 0);
+            return acc + employeeDays;
+        }, 0);
+    }, [filteredEmployees, monthDays, vacationMap, holidays, employeeCalendarsByDate]);
 
     // --- HANDLERS ---
 
@@ -291,6 +388,8 @@ const VacationManager: React.FC = () => {
         URL.revokeObjectURL(url);
     };
 
+    const isCalendarLoading = isFetchingCalendars || isMonthCalendarsLoading;
+
     return (
         <div className="flex flex-col h-full space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -376,12 +475,24 @@ const VacationManager: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-[400px]">
-                {isFetchingCalendars && (
+            <div className="relative flex-1 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-[400px]">
+                {isCalendarLoading && (
                     <div className="absolute inset-0 bg-white/50 z-40 flex items-center justify-center backdrop-blur-sm">
-                        <div className="flex items-center gap-3 px-6 py-3 bg-white rounded-full shadow-lg border border-slate-100">
-                            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent animate-spin rounded-full"></div>
-                            <span className="text-sm font-semibold text-slate-700">Actualizando calendarios...</span>
+                        <div className="w-full max-w-md px-5 py-4 bg-white rounded-2xl shadow-lg border border-slate-100">
+                            <div className="flex items-center justify-between text-sm font-semibold text-slate-700 mb-2">
+                                <span>{isMonthCalendarsLoading ? 'Cargando calendario mensual...' : 'Actualizando calendarios...'}</span>
+                                <span>{isMonthCalendarsLoading ? `${monthCalendarProgress}%` : '...'}</span>
+                            </div>
+                            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                {isMonthCalendarsLoading ? (
+                                    <div
+                                        className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-300"
+                                        style={{ width: `${Math.max(0, Math.min(100, monthCalendarProgress))}%` }}
+                                    />
+                                ) : (
+                                    <div className="h-full w-1/2 bg-gradient-to-r from-blue-500 to-indigo-500 animate-progress" />
+                                )}
+                            </div>
                         </div>
                     </div>
                 )}

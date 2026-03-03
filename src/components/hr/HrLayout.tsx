@@ -185,6 +185,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         isRefetching,
         fichajesError,
         refreshErpData,
+        reloadFromServer,
         selectedDepartment,
         setSelectedDepartment,
         selectedEmployeeIds,
@@ -325,7 +326,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         isRefetching,
         fichajesError,
         refreshErpData,
-        reloadFromServer: refreshErpData,
+        reloadFromServer,
         lastUpdated,
 
         handleIncidentClick,
@@ -430,7 +431,6 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                 ref={incidentManagerRef}
                 erpData={erpData}
                 employeeOptions={employeeOptions as any}
-                onRefreshNeeded={refreshErpData}
                 setIncidentLog={props.setIncidentLog}
                 startDate={startDate}
                 endDate={endDate}

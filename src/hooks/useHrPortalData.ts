@@ -10,6 +10,7 @@ import {
 import { useOperarios, useMotivos, useCalendario } from './useErp';
 import { useFichajes } from './useFichajes';
 import { useProcessDataWorker } from './useProcessDataWorker';
+import { processData } from '../services/dataProcessor';
 import { fetchSyntheticPunches } from '../services/firestoreService';
 import { getCalendarioOperario, CalendarioDia } from '../services/erpApi';
 import { normalizeDateKey, extractTimeHHMM } from '../utils/datetime';
@@ -44,8 +45,12 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
 
     // 1. Cargar Datos Maestros y Fichajes desde ERP (via TanStack Query)
     const { loading: loadingMotivos } = useMotivos();
-    const { operarios, loading: loadingOperarios } = useOperarios(false);
-    const { calendario: companyCalendarDays, loading: loadingCalendario } = useCalendario(startDate, endDate);
+    const { operarios, loading: loadingOperarios, refresh: refreshOperarios } = useOperarios(false);
+    const {
+        calendario: companyCalendarDays,
+        loading: loadingCalendario,
+        refresh: refreshCompanyCalendar
+    } = useCalendario(startDate, endDate);
 
     // Fichajes y Mutaciones
     const {
@@ -69,6 +74,9 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
             return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as unknown as RawDataRow[];
         },
         staleTime: 1000 * 60 * 5,
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     // 3. Cargar Fichajes Sintéticos desde Firestore
@@ -76,6 +84,9 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         queryKey: ['synthetic_punches', { startDate, endDate }],
         queryFn: () => fetchSyntheticPunches(startDate, endDate),
         staleTime: 1000 * 60 * 5,
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     const {
@@ -92,7 +103,8 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
             snapshot.forEach((employeeDoc) => {
                 const data = employeeDoc.data();
                 const rawId = data.IDOperario ?? employeeDoc.id;
-                const parsedId = parseInt(String(rawId), 10);
+                const numericStr = String(rawId).replace(/\D/g, '');
+                const parsedId = parseInt(numericStr, 10);
                 if (!Number.isNaN(parsedId)) {
                     ids.add(parsedId);
                 }
@@ -101,6 +113,9 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
             return ids;
         },
         staleTime: 1000 * 60 * 5,
+        refetchOnMount: false,
+        refetchOnReconnect: false,
+        refetchOnWindowFocus: false,
     });
 
     // 4. Estados locales para UI
@@ -117,6 +132,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
     // 5. Lógica de Calendarios (Estado local temporal)
     const [employeeCalendarsByDate, setEmployeeCalendarsByDate] = useState<Map<number, Map<string, CalendarioDia>>>(new Map());
     const [isFetchingCalendars, setIsFetchingCalendars] = useState(false);
+    const [calendarReloadTick, setCalendarReloadTick] = useState(0);
 
     const erpDataWithSynthetic = useMemo(() => {
         if (!erpData || erpData.length === 0) return [] as RawDataRow[];
@@ -204,13 +220,51 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
     );
     const isProcessing = status === 'processing';
 
+    const processedDataSafe = useMemo(() => {
+        if (processedData.length > 0 || erpDataWithSynthetic.length === 0) {
+            return processedData;
+        }
+
+        try {
+            const employeeCalendarMap = new Map<number, Map<string, number>>();
+            Object.entries(employeeCalendarTipoDiaRecord).forEach(([empId, days]) => {
+                employeeCalendarMap.set(Number(empId), new Map(Object.entries(days)));
+            });
+
+            return processData(
+                erpDataWithSynthetic,
+                allUsers,
+                undefined,
+                analysisRange,
+                holidaysSet,
+                employeeCalendarMap
+            );
+        } catch (error) {
+            logger.error('Fallback processData failed', error);
+            return processedData;
+        }
+    }, [
+        processedData,
+        erpDataWithSynthetic,
+        allUsers,
+        analysisRange,
+        holidaysSet,
+        employeeCalendarTipoDiaRecord
+    ]);
+
     // 7. Agrupar Datos para el Resumen y Ausencias
     const { datasetResumen, datasetAusencias } = useMemo(() => {
-        let processed: ProcessedDataRow[] = processedData;
+        let processed: ProcessedDataRow[] = processedDataSafe;
 
         if (selectedEmployeeIds.length > 0) {
-            const ids = new Set(selectedEmployeeIds.map(id => Number(id)));
-            processed = processed.filter(p => ids.has(p.operario));
+            const numericIds = selectedEmployeeIds
+                .map(id => Number(String(id).replace(/\D/g, '')))
+                .filter(id => Number.isFinite(id));
+
+            if (numericIds.length > 0) {
+                const ids = new Set(numericIds);
+                processed = processed.filter(p => ids.has(p.operario));
+            }
         } else if (selectedDepartment !== 'all' && selectedDepartment !== 'TODOS') {
             processed = processed.filter(p => p.colectivo === selectedDepartment);
         }
@@ -233,7 +287,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         });
 
         return { datasetResumen: resumen, datasetAusencias: ausencias };
-    }, [processedData, selectedEmployeeIds, selectedDepartment]);
+    }, [processedDataSafe, selectedEmployeeIds, selectedDepartment]);
 
     // Lógica de carga de calendarios por empleado
     const lastFetchParams = useRef<string>('');
@@ -241,7 +295,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
     const employeeCalendarCacheRef = useRef<Map<string, CalendarioDia[]>>(new Map());
 
     useEffect(() => {
-        const fetchParams = `${startDate}|${endDate}|${operarios.length}`;
+        const fetchParams = `${startDate}|${endDate}|${operarios.length}|${calendarReloadTick}`;
         if (lastFetchParams.current === fetchParams) return;
         lastFetchParams.current = fetchParams;
 
@@ -269,22 +323,21 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
                         if (calendarAbortController.current?.signal.aborted) break;
 
                         const batch = allActiveOperatorIds.slice(i, i + batchSize);
-                        const batchPromises = batch.map(id =>
-                            {
-                                const cacheKey = `${id}|${startDate}|${endDate}`;
-                                const cached = employeeCalendarCacheRef.current.get(cacheKey);
+                        const batchPromises = batch.map(id => {
+                            const cacheKey = `${id}|${startDate}|${endDate}`;
+                            const cached = employeeCalendarCacheRef.current.get(cacheKey);
 
-                                if (cached) {
-                                    return Promise.resolve({ id, cal: cached });
-                                }
-
-                                return getCalendarioOperario(id.toString(), startDate, endDate)
-                                    .then(cal => {
-                                        employeeCalendarCacheRef.current.set(cacheKey, cal);
-                                        return { id, cal };
-                                    })
-                                    .catch(() => ({ id, cal: [] as CalendarioDia[] }));
+                            if (cached) {
+                                return Promise.resolve({ id, cal: cached });
                             }
+
+                            return getCalendarioOperario(id.toString(), startDate, endDate)
+                                .then(cal => {
+                                    employeeCalendarCacheRef.current.set(cacheKey, cal);
+                                    return { id, cal };
+                                })
+                                .catch(() => ({ id, cal: [] as CalendarioDia[] }));
+                        }
                         );
 
                         const batchResults = await Promise.all(batchPromises);
@@ -326,7 +379,21 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
                 calendarAbortController.current.abort();
             }
         };
-    }, [operarios, startDate, endDate]);
+    }, [operarios, startDate, endDate, calendarReloadTick]);
+
+    const reloadFromServer = async () => {
+        employeeCalendarCacheRef.current.clear();
+        lastFetchParams.current = '';
+        setCalendarReloadTick(prev => prev + 1);
+
+        await Promise.allSettled([
+            refreshErpData(),
+            refreshOperarios(),
+            refreshCompanyCalendar(),
+            refetchActiveSickLeaves(),
+            refetchFirebaseEmployeeIds()
+        ]);
+    };
 
     // 8. Handlers para Acciones
     const handleExport = async (range?: { startDate: string; endDate: string }) => {
@@ -386,7 +453,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         try {
             const db = getFirebaseDb();
             const collectionName = await resolveEmployeeCollection(db);
-            const docId = String(employeeId).padStart(3, '0');
+            const docId = `FV${String(employeeId).padStart(3, '0')}`;
 
             await setDoc(doc(db, collectionName, docId), {
                 IDOperario: docId,
@@ -404,8 +471,13 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
 
             await refetchFirebaseEmployeeIds();
             logger.success(`Empleado ${docId} añadido en Firebase`);
-        } catch (error) {
+        } catch (error: any) {
             logger.error(`Error registrando empleado ${employeeId} en Firebase`, error);
+            if (error.code === 'permission-denied') {
+                window.alert('Error: No tienes permisos suficientes (SUPER_ADMIN) para registrar empleados en Firebase. Por favor, solicita a un administrador que añada este empleado.');
+            } else {
+                window.alert(`Error registrando el empleado: ${error.message || 'Error desconocido'}`);
+            }
             throw error;
         } finally {
             setRegisteringEmployeeIds(prev => {
@@ -419,9 +491,10 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
 
     const selectedEmployeeData = useMemo(() => {
         if (selectedEmployeeIds.length !== 1) return undefined;
-        const id = Number(selectedEmployeeIds[0]);
-        return processedData.find(p => p.operario === id);
-    }, [selectedEmployeeIds, processedData]);
+        const id = Number(String(selectedEmployeeIds[0]).replace(/\D/g, ''));
+        if (!Number.isFinite(id)) return undefined;
+        return processedDataSafe.find(p => p.operario === id);
+    }, [selectedEmployeeIds, processedDataSafe]);
 
     const isLongRange = useMemo(() => {
         const start = new Date(startDate);
@@ -432,7 +505,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
 
     return {
         erpData,
-        processedData,
+        processedData: processedDataSafe,
         datasetResumen,
         datasetAusencias,
         employeeOptions: operarios.map(op => ({
@@ -449,6 +522,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         isRefetching: isFetchingFichajes && !isLoadingFichajes,
         fichajesError,
         refreshErpData,
+        reloadFromServer,
         selectedDepartment,
         setSelectedDepartment,
         selectedEmployeeIds,
