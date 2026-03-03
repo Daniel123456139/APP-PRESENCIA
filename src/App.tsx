@@ -28,6 +28,7 @@ import { SyncService } from './services/syncService';
 import { encryptStorageData, decryptStorageData } from './services/encryptionService';
 import { signOutApp, subscribeToAuthChanges } from './services/firebaseAuthService';
 import { getFirebaseApp } from './firebaseConfig';
+import logger from './utils/logger';
 
 export interface AuthContextType {
     user: User | null;
@@ -74,7 +75,21 @@ const MainRoutes: React.FC = () => {
         endDate: string;
         startTime: string;
         endTime: string;
-    } | null>(null);
+    } | null>(() => {
+        try {
+            const saved = localStorage.getItem('global_filter_state');
+            return saved ? JSON.parse(saved) : null;
+        } catch { return null; }
+    });
+
+    // Persistir globalFilterState
+    useEffect(() => {
+        if (globalFilterState) {
+            localStorage.setItem('global_filter_state', JSON.stringify(globalFilterState));
+        } else {
+            localStorage.removeItem('global_filter_state');
+        }
+    }, [globalFilterState]);
 
     // React Query Hooks
     const { erpData, isLoading: loadingFichajes, error: errorFichajes } = useFichajes(

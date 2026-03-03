@@ -129,8 +129,26 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
     });
 
     // 4. Estados locales para UI
-    const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
-    const [selectedDepartment, setSelectedDepartment] = useState<string>('all');
+    // 4. Estados locales para UI con persistencia
+    const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>(() => {
+        try {
+            const saved = localStorage.getItem('hr_selected_employees');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+
+    const [selectedDepartment, setSelectedDepartment] = useState<string>(() => {
+        return localStorage.getItem('hr_selected_department') || 'all';
+    });
+
+    // Guardar cambios en localStorage
+    useEffect(() => {
+        localStorage.setItem('hr_selected_employees', JSON.stringify(selectedEmployeeIds));
+    }, [selectedEmployeeIds]);
+
+    useEffect(() => {
+        localStorage.setItem('hr_selected_department', selectedDepartment);
+    }, [selectedDepartment]);
     const [registeringEmployeeIds, setRegisteringEmployeeIds] = useState<Set<number>>(new Set());
     const [isPayrollExporting, setIsPayrollExporting] = useState(false);
     const [payrollExportProgress, setPayrollExportProgress] = useState<PayrollExportUiProgress>({

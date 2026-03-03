@@ -169,6 +169,12 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
     const [startTime, setStartTime] = useState(props.initialStartTime || '00:00');
     const [endTime, setEndTime] = useState(props.initialEndTime || '23:59');
 
+    // Persistir cambios de fecha/hora en el filtro global
+    useEffect(() => {
+        const state = { startDate, endDate, startTime, endTime };
+        localStorage.setItem('global_filter_state', JSON.stringify(state));
+    }, [startDate, endDate, startTime, endTime]);
+
     // Business Logic Hook
     const {
         erpData,
