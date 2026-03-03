@@ -296,14 +296,14 @@ export const generateProcessedData = (
         const dailyShiftMap = new Map<string, string>();
         const dailyJustificationMap = new Set<string>();
         const datesWithActivity = new Set<string>();
-        const shiftCounts: { M: number; TN: number } = { M: 0, TN: 0 };
+        const shiftCounts: { M: number; TN: number; NOCHE: number } = { M: 0, TN: 0, NOCHE: 0 };
 
         let i = 0;
         const len = allRows.length;
 
         const getShiftBoundsMinutes = (shiftCode: string): { start: number; end: number } => {
             if (shiftCode === 'TN' || shiftCode === 'T') return { start: 15 * 60, end: 23 * 60 };
-            if (shiftCode === 'N') return { start: 23 * 60, end: 7 * 60 };
+            if (shiftCode === 'NOCHE' || shiftCode === 'N') return { start: 23 * 60, end: 7 * 60 };
             if (shiftCode === 'C') return { start: 8 * 60, end: 17 * 60 };
             return { start: 7 * 60, end: 15 * 60 };
         };
@@ -406,10 +406,11 @@ export const generateProcessedData = (
                         resolvedShift = getShiftByTime(currentHoraStr);
                     }
 
-                    const normalizedShift = resolvedShift === 'T' ? 'TN' : resolvedShift;
+                    const normalizedShift = resolvedShift === 'T' ? 'TN' : (resolvedShift === 'N' ? 'NOCHE' : resolvedShift);
 
                     dailyShiftMap.set(currentDateStr, normalizedShift);
                     if (normalizedShift === 'TN') shiftCounts.TN++;
+                    else if (normalizedShift === 'NOCHE') shiftCounts.NOCHE++;
                     else shiftCounts.M++;
                 }
 
@@ -497,6 +498,7 @@ export const generateProcessedData = (
                         let diffMins = 0;
                         let theoreticalHour = 7;
                         if (currentShiftCode === 'TN') theoreticalHour = 15;
+                        if (currentShiftCode === 'NOCHE') theoreticalHour = 23;
 
                         // Solo aplicar si estamos cerca de la hora de entrada teórica
                         if (effectiveStart.getHours() === theoreticalHour) {
@@ -609,11 +611,13 @@ export const generateProcessedData = (
                             else if (ma === 10) {
                                 employee.hITAT += justifiedHours;
                                 if (currentShiftCode === 'TN' || currentShiftCode === 'T') shiftCounts.TN++;
+                                else if (currentShiftCode === 'NOCHE') shiftCounts.NOCHE++;
                                 else shiftCounts.M++;
                             }
                             else if (ma === 11) {
                                 employee.hITEC += justifiedHours;
                                 if (currentShiftCode === 'TN' || currentShiftCode === 'T') shiftCounts.TN++;
+                                else if (currentShiftCode === 'NOCHE') shiftCounts.NOCHE++;
                                 else shiftCounts.M++;
                             }
                             else if (ma === 13) employee.hLeyFam += justifiedHours;
@@ -766,6 +770,7 @@ export const generateProcessedData = (
                                 const bound20 = new Date(startYear, startMonth, startDay, 20, 0, 0);
                                 const bound23 = new Date(startYear, startMonth, startDay, 23, 0, 0);
                                 const bound06Next = new Date(startYear, startMonth, startDay + 1, 6, 0, 0);
+                                const bound07Next = new Date(startYear, startMonth, startDay + 1, 7, 0, 0);
 
                                 let totalNocturnas = 0;
 
@@ -775,6 +780,13 @@ export const generateProcessedData = (
                                     const hNocturnasExtraNoche = adjustedOverlapHours(bound23, bound06Next);
                                     const hNocturnasExtraMadrugada = adjustedOverlapHours(bound00, bound07);
                                     totalNocturnas = hNocturnasExtraNoche + hNocturnasExtraMadrugada;
+                                } else if (currentShiftCode === 'NOCHE') {
+                                    // Turno noche (23:00 - 07:00)
+                                    // Nocturnas = Intersección con 20:00-06:00 (que incluye su jornada y pre-jornada tardía)
+                                    // Pero el bucket de 'nocturnas' en el excel se suma para todo.
+                                    const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
+                                    const hNocturnasNoche = adjustedOverlapHours(bound20, bound06Next);
+                                    totalNocturnas = hNocturnasMadrugada + hNocturnasNoche;
                                 } else {
                                     // Turno mañana: nocturnas estándar 20:00-06:00
                                     const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
@@ -791,6 +803,21 @@ export const generateProcessedData = (
                                     employee.horasTarde += hTarde;
 
                                     // FIX: Si viene por la mañana (fuera de turno), acumular en Horas Dia
+                                    const hDia = adjustedOverlapHours(bound07, bound15);
+                                    employee.horasDia += hDia;
+
+                                } else if (currentShiftCode === 'NOCHE') {
+                                    // Turno Noche (23:00 - 07:00)
+                                    // Horas Noche = Intersección con su jornada (23:00 - 07:00)
+                                    const hNoche = adjustedOverlapHours(bound23, bound07Next);
+                                    employee.horasNoche += hNoche;
+
+                                    // Exceso Jornada 1 (15:00 - 20:00) - Horas extra por la tarde
+                                    const hExceso1 = adjustedOverlapHours(bound15, bound20);
+                                    if (!employee.excesoJornada1) employee.excesoJornada1 = 0;
+                                    employee.excesoJornada1 += hExceso1;
+
+                                    // Horas Dia (07:00 - 15:00) - Horas extra por la mañana
                                     const hDia = adjustedOverlapHours(bound07, bound15);
                                     employee.horasDia += hDia;
 
@@ -1269,7 +1296,8 @@ export const generateProcessedData = (
             }
         }
 
-        if (shiftCounts.TN > shiftCounts.M) employee.turnoAsignado = 'TN';
+        if (shiftCounts.NOCHE > shiftCounts.M && shiftCounts.NOCHE > shiftCounts.TN) employee.turnoAsignado = 'NOCHE';
+        else if (shiftCounts.TN > shiftCounts.M) employee.turnoAsignado = 'TN';
         else employee.turnoAsignado = 'M';
 
         if (employee.isFlexible) {
@@ -1297,9 +1325,9 @@ export const generateProcessedData = (
                 prevDay.setDate(prevDay.getDate() - 1);
                 const prevDayStr = toISODateLocal(prevDay);
 
-                // Verificar si el día anterior era turno TN
+                // Verificar si el día anterior era turno TN o NOCHE
                 const prevShift = dailyShiftMap.get(prevDayStr);
-                if (prevShift === 'TN') {
+                if (prevShift === 'TN' || prevShift === 'NOCHE') {
                     // Marcar día anterior como con actividad
                     datesWithActivity.add(prevDayStr);
                 }
@@ -1322,8 +1350,8 @@ export const generateProcessedData = (
             // Shift TN: 15:00 (900m) - 23:00 (1380m)
             let totalExcesoMinutes = 0;
 
-            const shiftStartMin = employee.turnoAsignado === 'TN' ? 900 : 420; // 15:00 vs 07:00
-            const shiftEndMin = employee.turnoAsignado === 'TN' ? 1380 : 900;  // 23:00 vs 15:00
+            const shiftStartMin = employee.turnoAsignado === 'NOCHE' ? 1380 : (employee.turnoAsignado === 'TN' ? 900 : 420); // 23:00 vs 15:00 vs 07:00
+            const shiftEndMin = employee.turnoAsignado === 'NOCHE' ? 1860 : (employee.turnoAsignado === 'TN' ? 1380 : 900);  // 07:00(+1) vs 23:00 vs 15:00
 
             const empFlags = sliceFestiveFlags.get(employee.operario) || [];
 
@@ -1550,6 +1578,8 @@ export const generateProcessedData = (
                 rawWorkHours = toHoursRounded(dailyWorkedMinutes);
             } else if (employee.turnoAsignado === 'M') {
                 rawWorkHours = employee.horasDia;
+            } else if (employee.turnoAsignado === 'NOCHE') {
+                rawWorkHours = employee.horasNoche;
             } else {
                 rawWorkHours = employee.horasTarde;
             }
@@ -1576,6 +1606,7 @@ export const generateProcessedData = (
             const rawTotalWorked =
                 employee.horasDia +
                 employee.horasTarde +
+                employee.horasNoche +
                 employee.nocturnas +
                 employee.excesoJornada1 +
                 employee.festivas;

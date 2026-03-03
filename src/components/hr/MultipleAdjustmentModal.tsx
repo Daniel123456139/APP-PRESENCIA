@@ -138,26 +138,31 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
             // 3. Last fallback: Infer from time
             let isMorning = false;
             let isAfternoon = false;
+            let isNight = false;
 
             const assignedShift = employeeShifts?.get(row.IDOperario);
             if (assignedShift) {
                 isMorning = assignedShift === 'M';
                 isAfternoon = assignedShift === 'TN' || assignedShift === 'T';
+                isNight = assignedShift === 'NOCHE' || assignedShift === 'N';
             } else if (row.TurnoTexto) {
                 const s = row.TurnoTexto.toUpperCase();
                 isMorning = s === 'M' || s.startsWith('M');
-                isAfternoon = s === 'TN' || s === 'T' || s === 'N';
+                isAfternoon = s === 'TN' || s === 'T';
+                isNight = s === 'NOCHE' || s === 'N';
             }
 
             // Fallback: Infer from time if TurnoTexto is empty
-            if (!isMorning && !isAfternoon) {
+            if (!isMorning && !isAfternoon && !isNight) {
                 if (isEntry) {
                     if (hour >= 5 && hour <= 10) isMorning = true;
                     else if (hour >= 13 && hour <= 16) isAfternoon = true;
+                    else if (hour >= 20 || hour <= 1) isNight = true;
                 }
                 else if (isExit) {
                     if (hour >= 13 && hour <= 16) isMorning = true;
-                    else if (hour >= 21) isAfternoon = true; // 21:00+
+                    else if (hour >= 21 && hour <= 23) isAfternoon = true;
+                    else if (hour >= 6 && hour <= 9) isNight = true;
                 }
             }
 
@@ -210,6 +215,45 @@ const MultipleAdjustmentModal: React.FC<MultipleAdjustmentModalProps> = ({ isOpe
                             originalRow: row,
                             originalIndex: index,
                             targetTime: '23:00:00',
+                            type: 'Salida'
+                        });
+                    }
+                }
+            } else if (isNight) {
+                if (isEntry) {
+                    // Start 23:00. Rules for Mon-Sat:
+                    // 20:01 - 21:00 -> 21:00
+                    // 21:01 - 22:00 -> 22:00
+                    // 22:01 - 23:00 -> 23:00
+
+                    const rowDate = new Date(`${row.Fecha}T00:00:00`);
+                    const isSunday = rowDate.getDay() === 0;
+
+                    if (!isSunday) {
+                        const nightEntryTargets = [21, 22, 23];
+                        for (const targetHour of nightEntryTargets) {
+                            const windowStart = toMinutes(targetHour - 1, 1);
+                            const windowEnd = toMinutes(targetHour, 0);
+
+                            if (rowTimeMinutes >= windowStart && rowTimeMinutes <= windowEnd) {
+                                results.push({
+                                    originalRow: row,
+                                    originalIndex: index,
+                                    targetTime: `${String(targetHour).padStart(2, '0')}:00:00`,
+                                    type: 'Entrada'
+                                });
+                                break;
+                            }
+                        }
+                    }
+                } else if (isExit) {
+                    // End 07:00. Adjust only if late (after 07:00)
+                    // We allow some margin for the adjustment
+                    if (rowTimeMinutes > toMinutes(7, 0) && rowTimeMinutes <= toMinutes(7, 30)) {
+                        results.push({
+                            originalRow: row,
+                            originalIndex: index,
+                            targetTime: '07:00:00',
                             type: 'Salida'
                         });
                     }
