@@ -782,12 +782,11 @@ export const generateProcessedData = (
                                     const hNocturnasExtraMadrugada = adjustedOverlapHours(bound00, bound07);
                                     totalNocturnas = hNocturnasExtraNoche + hNocturnasExtraMadrugada;
                                 } else if (currentShiftCode === 'NOCHE') {
-                                    // Turno noche (23:00 - 07:00)
-                                    // Nocturnas = Intersección con 20:00-06:00 (que incluye su jornada y pre-jornada tardía)
-                                    // Pero el bucket de 'nocturnas' en el excel se suma para todo.
-                                    const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
-                                    const hNocturnasNoche = adjustedOverlapHours(bound20, bound06Next);
-                                    totalNocturnas = hNocturnasMadrugada + hNocturnasNoche;
+                                    // Turno noche (23:00 - 07:00):
+                                    // - Horario normal -> Horas Noche
+                                    // - NOCTURNAS solo para el EXTRA previo al turno (20:00-23:00)
+                                    const hNocturnasExtraPreTurno = adjustedOverlapHours(bound20, bound23);
+                                    totalNocturnas = hNocturnasExtraPreTurno;
                                 } else {
                                     // Turno mañana: nocturnas estándar 20:00-06:00
                                     const hNocturnasMadrugada = adjustedOverlapHours(bound00, bound06);
@@ -1351,6 +1350,32 @@ export const generateProcessedData = (
             // Shift TN: 15:00 (900m) - 23:00 (1380m)
             let totalExcesoMinutes = 0;
 
+            const getNocturnalOverlapMinutes = (start: number, end: number): number => {
+                if (end <= start) return 0;
+
+                let overlap = 0;
+                const firstDay = Math.floor(start / 1440);
+                const lastDay = Math.floor((end - 1) / 1440);
+
+                for (let day = firstDay; day <= lastDay; day++) {
+                    const dayOffset = day * 1440;
+                    const ranges = [
+                        { start: dayOffset, end: dayOffset + (7 * 60) },
+                        { start: dayOffset + (20 * 60), end: dayOffset + 1440 }
+                    ];
+
+                    for (const range of ranges) {
+                        const overlapStart = Math.max(start, range.start);
+                        const overlapEnd = Math.min(end, range.end);
+                        if (overlapEnd > overlapStart) {
+                            overlap += (overlapEnd - overlapStart);
+                        }
+                    }
+                }
+
+                return overlap;
+            };
+
             const shiftStartMin = employee.turnoAsignado === 'NOCHE' ? 1380 : (employee.turnoAsignado === 'TN' ? 900 : 420); // 23:00 vs 15:00 vs 07:00
             const shiftEndMin = employee.turnoAsignado === 'NOCHE' ? 1860 : (employee.turnoAsignado === 'TN' ? 1380 : 900);  // 07:00(+1) vs 23:00 vs 15:00
 
@@ -1386,7 +1411,31 @@ export const generateProcessedData = (
                 }
 
                 const excess = duration - overlap;
-                if (excess > 0) totalExcesoMinutes += excess;
+                if (excess <= 0) return;
+
+                // Regla negocio: las horas en franja nocturna (20:00-07:00)
+                // no se muestran como EXCESOS, se reflejan en NOCTURNAS.
+                let nonNocturnalExcess = 0;
+
+                if (start < shiftStartMin) {
+                    const earlyEnd = Math.min(end, shiftStartMin);
+                    const earlyDuration = Math.max(0, earlyEnd - start);
+                    if (earlyDuration > 0) {
+                        nonNocturnalExcess += Math.max(0, earlyDuration - getNocturnalOverlapMinutes(start, earlyEnd));
+                    }
+                }
+
+                if (end > shiftEndMin) {
+                    const lateStart = Math.max(start, shiftEndMin);
+                    const lateDuration = Math.max(0, end - lateStart);
+                    if (lateDuration > 0) {
+                        nonNocturnalExcess += Math.max(0, lateDuration - getNocturnalOverlapMinutes(lateStart, end));
+                    }
+                }
+
+                if (nonNocturnalExcess > 0) {
+                    totalExcesoMinutes += nonNocturnalExcess;
+                }
             });
 
             employee.horasExceso = Math.round((totalExcesoMinutes / 60 + Number.EPSILON) * 100) / 100;

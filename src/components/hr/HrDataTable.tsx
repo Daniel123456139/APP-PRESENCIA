@@ -1,5 +1,5 @@
 
-import React, { useState, memo, useMemo, useRef, useEffect } from 'react';
+import React, { useState, memo, useMemo, useRef, useEffect, useCallback } from 'react';
 import { ProcessedDataRow, RawDataRow, CompanyHoliday } from '../../types';
 import { formatPeriodoAnalisis } from '../../utils/dateFormatter';
 import { countWorkingDays } from '../../utils/localDate';
@@ -85,6 +85,9 @@ type JustifiedEmployeeMeta = {
     count: number;
     motiveIds: Set<number>;
 };
+
+const SUMMARY_SEARCH_STORAGE_KEY = 'hr_resumen_search_term';
+const SUMMARY_TABLE_SCROLL_STORAGE_KEY = 'hr_resumen_table_scroll_top';
 
 const sortValues = (a: any, b: any, direction: SortDirection, isNumeric: boolean = false) => {
     const isEmptyA = a === null || a === undefined || a === '' || a === '-';
@@ -360,8 +363,45 @@ const SummaryView: React.FC<{
     flexibleEmployeeIds?: Set<number>;
     highlightEmployeeIds?: Set<number>;
 }> = memo(({ data, rawData, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, companyHolidays, isLongRange, flexibleEmployeeIds, highlightEmployeeIds }) => {
-    const [searchTerm, setSearchTerm] = useState('');
+    const [searchTerm, setSearchTerm] = useState(() => {
+        try {
+            return sessionStorage.getItem(SUMMARY_SEARCH_STORAGE_KEY) || '';
+        } catch {
+            return '';
+        }
+    });
     const [sortConfig, setSortConfig] = useState<{ key: SortableKeys; direction: SortDirection } | null>({ key: 'operario', direction: 'ascending' });
+    const tableScrollRef = useRef<HTMLDivElement>(null);
+    const didRestoreScrollRef = useRef(false);
+
+    useEffect(() => {
+        sessionStorage.setItem(SUMMARY_SEARCH_STORAGE_KEY, searchTerm);
+    }, [searchTerm]);
+
+    useEffect(() => {
+        if (didRestoreScrollRef.current) return;
+        if (data.length === 0) return;
+
+        const node = tableScrollRef.current;
+        if (!node) return;
+
+        const raw = sessionStorage.getItem(SUMMARY_TABLE_SCROLL_STORAGE_KEY);
+        if (raw !== null) {
+            const savedTop = Number(raw);
+            if (Number.isFinite(savedTop) && savedTop >= 0) {
+                requestAnimationFrame(() => {
+                    node.scrollTop = savedTop;
+                });
+            }
+        }
+
+        didRestoreScrollRef.current = true;
+    }, [data.length]);
+
+    const handleTableScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+        const node = event.currentTarget;
+        sessionStorage.setItem(SUMMARY_TABLE_SCROLL_STORAGE_KEY, String(node.scrollTop));
+    }, []);
 
     const handleSort = (key: SortableKeys) => {
         setSortConfig(current => {
@@ -430,7 +470,7 @@ const SummaryView: React.FC<{
                     valA = turnoRank(a.turnoAsignado);
                     valB = turnoRank(b.turnoAsignado);
                     isNumeric = true;
-                } else if (['operario', 'totalHoras', 'presencia', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'festivas', 'hTAJ', 'incidentCount'].includes(key as string)) {
+                } else if (['operario', 'totalHoras', 'presencia', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'nocturnas', 'festivas', 'hTAJ', 'incidentCount'].includes(key as string)) {
                     isNumeric = true;
                 }
 
@@ -515,7 +555,11 @@ const SummaryView: React.FC<{
                 </div>
             </div>
 
-            <div className="hidden md:block overflow-auto max-h-[600px] border border-slate-200 rounded-xl relative scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
+            <div
+                ref={tableScrollRef}
+                onScroll={handleTableScroll}
+                className="hidden md:block overflow-auto max-h-[600px] border border-slate-200 rounded-xl relative scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent"
+            >
                 <table className="w-full text-sm text-left text-slate-500">
                     <thead className="bg-slate-100/80 border-b border-slate-200 sticky top-0 z-10">
                         <tr>
@@ -525,8 +569,9 @@ const SummaryView: React.FC<{
                             <TableHeader colKey="turnoAsignado" label="TURNO" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="presencia" label="PRESENCIA (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="horasJustificadas" label="JUSTIFICADAS (h)" currentSort={sortConfig} onSort={handleSort} />
-                            <TableHeader colKey="horasTotalesConJustificacion" label="TOTAL (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="horasExceso" label="EXCESOS (h)" currentSort={sortConfig} onSort={handleSort} />
+                            <TableHeader colKey="nocturnas" label="NOCTURNAS (h)" currentSort={sortConfig} onSort={handleSort} />
+                            <TableHeader colKey="horasTotalesConJustificacion" label="TOTAL (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="festivas" label="FESTIVAS (h)" currentSort={sortConfig} onSort={handleSort} />
                             <TableHeader colKey="hTAJ" label="TAJ" currentSort={sortConfig} onSort={handleSort} />
                             {isLongRange && (
@@ -621,8 +666,9 @@ const SummaryView: React.FC<{
                                     <td className="px-4 py-4">
                                         <JustifiedCell row={row} startDate={startDate} endDate={endDate} />
                                     </td>
-                                    <td className="px-4 py-4 font-mono font-bold">{row.horasTotalesConJustificacion.toFixed(2)} h</td>
                                     <td className="px-4 py-4 font-mono text-orange-600">{row.horasExceso.toFixed(2)} h</td>
+                                    <td className="px-4 py-4 font-mono text-indigo-600">{row.nocturnas ? row.nocturnas.toFixed(2) : '0.00'} h</td>
+                                    <td className="px-4 py-4 font-mono font-bold">{row.horasTotalesConJustificacion.toFixed(2)} h</td>
                                     <td className="px-4 py-4 font-mono text-purple-600">{row.festivas ? row.festivas.toFixed(2) : '0.00'} h</td>
                                     <td className="px-4 py-4">{`${row.numTAJ} / ${row.hTAJ.toFixed(2)}`}</td>
                                     {

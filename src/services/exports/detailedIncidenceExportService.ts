@@ -31,8 +31,8 @@ const saveAs: (data: Blob, filename: string) => void =
  * 5.  Horas Dia:        Tiempo trabajado 07:00-15:00 (MENOS TAJ en ese rango)
  * 6.  EXCESO JORNADA 1: Solo turno M, horas realizadas 15:00-19:59
  * 7.  Horas Tarde:      Tiempo trabajado 15:00-23:00 (MENOS TAJ en ese rango)
- * 8.  NOCTURNAS:        Cualquier turno, tiempo trabajado 20:00-06:00
- * 9.  Horas Noche:      Reservado para turno N (actualmente sin uso, queda en 0)
+ * 8.  NOCTURNAS:        Horas nocturnas EXTRA fuera de jornada normal
+ * 9.  Horas Noche:      Jornada normal del turno NOCHE (23:00-07:00)
  * 10. FESTIVAS:         Horas en fines de semana + festivos calendario
  * 
  * 11. H. Medico:        (Código 02) Horas usadas en PERIODO seleccionado
@@ -210,22 +210,34 @@ const resolveDepartment = (rows: RawDataRow[], fallback: string): string => {
     return last.DescDepartamento || fallback;
 };
 
-const resolveShiftFromRows = (rows: RawDataRow[], fallback: 'M' | 'TN'): 'M' | 'TN' => {
+type ExportShift = 'M' | 'TN' | 'NOCHE';
+
+const resolveShiftFromRows = (rows: RawDataRow[], fallback: ExportShift): ExportShift => {
     if (rows.length === 0) return fallback;
 
     let turnoM = 0;
     let turnoTN = 0;
+    let turnoNoche = 0;
     rows.forEach(r => {
         const turno = String(r.TurnoTexto || '').toUpperCase().trim();
         if (!turno) return;
-        if (turno.includes('TN') || turno.includes('TARDE') || turno.includes('NOCHE')) {
+
+        if (turno === 'N' || turno.includes('NOCHE')) {
+            turnoNoche += 1;
+            return;
+        }
+
+        if (turno.includes('TN') || turno.includes('TARDE')) {
             turnoTN += 1;
             return;
         }
+
         if (turno.includes('M') || turno.includes('MANANA') || turno.includes('MAÑANA')) {
             turnoM += 1;
         }
     });
+
+    if (turnoNoche > turnoTN && turnoNoche > turnoM) return 'NOCHE';
     if (turnoTN > turnoM) return 'TN';
     if (turnoM > turnoTN) return 'M';
 
@@ -237,24 +249,27 @@ const resolveShiftFromRows = (rows: RawDataRow[], fallback: 'M' | 'TN'): 'M' | '
 
     if (entradas.length > 0) {
         const median = entradas[Math.floor(entradas.length / 2)];
+        if (median >= 21 * 60) return 'NOCHE';
         return median >= 12 * 60 ? 'TN' : 'M';
     }
 
     return fallback;
 };
 
-const normalizeShiftToken = (raw: unknown): 'M' | 'TN' | null => {
+const normalizeShiftToken = (raw: unknown): ExportShift | null => {
     if (raw === null || raw === undefined) return null;
     const token = String(raw).toUpperCase().trim();
     if (!token) return null;
 
+    if (token === 'N' || token.includes('NOCHE')) {
+        return 'NOCHE';
+    }
+
     if (
         token === 'TN' ||
         token === 'T' ||
-        token === 'N' ||
         token.includes('TN') ||
-        token.includes('TARDE') ||
-        token.includes('NOCHE')
+        token.includes('TARDE')
     ) {
         return 'TN';
     }
@@ -266,11 +281,11 @@ const normalizeShiftToken = (raw: unknown): 'M' | 'TN' | null => {
     return null;
 };
 
-const getRowShiftCode = (row: RawDataRow): 'M' | 'TN' | null => {
+const getRowShiftCode = (row: RawDataRow): ExportShift | null => {
     return normalizeShiftToken(row.IDTipoTurno) || normalizeShiftToken(row.TurnoTexto);
 };
 
-const buildDailyShiftMap = (rows: RawDataRow[], fallback: 'M' | 'TN'): Map<string, 'M' | 'TN'> => {
+const buildDailyShiftMap = (rows: RawDataRow[], fallback: ExportShift): Map<string, ExportShift> => {
     const byDate = new Map<string, RawDataRow[]>();
     rows.forEach(row => {
         const dateKey = normalizeDateStr(row.Fecha);
@@ -279,18 +294,24 @@ const buildDailyShiftMap = (rows: RawDataRow[], fallback: 'M' | 'TN'): Map<strin
         byDate.set(dateKey, current);
     });
 
-    const out = new Map<string, 'M' | 'TN'>();
+    const out = new Map<string, ExportShift>();
 
     byDate.forEach((dateRows, dateKey) => {
         let turnoM = 0;
         let turnoTN = 0;
+        let turnoNoche = 0;
 
         dateRows.forEach(row => {
             const rowShift = getRowShiftCode(row);
             if (rowShift === 'M') turnoM += 1;
             else if (rowShift === 'TN') turnoTN += 1;
+            else if (rowShift === 'NOCHE') turnoNoche += 1;
         });
 
+        if (turnoNoche > turnoTN && turnoNoche > turnoM) {
+            out.set(dateKey, 'NOCHE');
+            return;
+        }
         if (turnoTN > turnoM) {
             out.set(dateKey, 'TN');
             return;
@@ -307,6 +328,10 @@ const buildDailyShiftMap = (rows: RawDataRow[], fallback: 'M' | 'TN'): Map<strin
 
         if (entries.length > 0) {
             const firstEntry = Math.min(...entries);
+            if (firstEntry >= 21 * 60) {
+                out.set(dateKey, 'NOCHE');
+                return;
+            }
             out.set(dateKey, firstEntry >= 12 * 60 ? 'TN' : 'M');
             return;
         }
@@ -664,8 +689,8 @@ interface TimeBuckets {
     horasDia: number;       // 07:00 - 15:00
     excesoJornada1: number; // 15:00 - 19:59 (Solo Turno M)
     horasTarde: number;     // 15:00 - 23:00 (Solo Turno TN)
-    nocturnas: number;      // M: 20:00-07:00 | TN: 23:00-07:00
-    horasNoche: number;     // Reservado para turno N (actualmente 0)
+    nocturnas: number;      // Horas nocturnas EXTRA fuera de jornada normal
+    horasNoche: number;     // Jornada normal del turno NOCHE (23:00-07:00)
     festivas: number;       // Fines de semana / Festivos
 }
 
@@ -842,7 +867,7 @@ const hasReducedWorkingDay = (calendar: any[]): boolean => {
  *    si va a Festivas, NO va a los otros cubos.
  *
  * 2. Si no es festivo (Laborable):
- *    Depende del Turno Asignado al usuario (M o TN).
+ *    Depende del Turno Asignado al usuario (M, TN o NOCHE).
  *    
  *    Turno M (Mañana):
  *       - Horas Dia: 07:00 - 15:00
@@ -851,15 +876,16 @@ const hasReducedWorkingDay = (calendar: any[]): boolean => {
  *
  *    Turno TN (Tarde/Noche):
  *       - Horas Tarde: 15:00 - 23:00
- *       - Nocturnas: 20:00 - 07:00
+ *       - Nocturnas: solo EXTRA 23:00 - 07:00
  *       - Horas Dia: 07:00 - 15:00 (mantenido para compatibilidad histórica)
  *
- *    Horas Noche:
- *       - Reservado para hipotético turno N. En operación actual se mantiene en 0.
+ *    Turno NOCHE:
+ *       - Horas Noche: 23:00 - 07:00 (jornada normal)
+ *       - Nocturnas: solo EXTRA 20:00 - 23:00
  */
 const calculateTimeBuckets = (
     row: RawDataRow,
-    userShift: 'M' | 'TN',
+    userShift: ExportShift,
     isFestiveDay: boolean // Pasa true si es festivo calendario o fin de semana
 ): TimeBuckets => {
     const buckets: TimeBuckets = {
@@ -901,7 +927,7 @@ const sumBuckets = (b1: TimeBuckets, b2: TimeBuckets): TimeBuckets => ({
     festivas: b1.festivas + b2.festivas
 });
 
-const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive: boolean): TimeBuckets => {
+const resolveBucket = (start: number, end: number, shift: ExportShift, isFestive: boolean): TimeBuckets => {
     const b: TimeBuckets = { horasDia: 0, excesoJornada1: 0, horasTarde: 0, nocturnas: 0, horasNoche: 0, festivas: 0 };
     const duration = (end - start) / 60;
     if (duration <= 0) return b;
@@ -917,6 +943,7 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
     const R_07_15 = { s: 7 * 60, e: 15 * 60 };   // 420 - 900
     const R_15_20 = { s: 15 * 60, e: 20 * 60 };  // 900 - 1200
     const R_15_23 = { s: 15 * 60, e: 23 * 60 };  // 900 - 1380
+    const R_20_23 = { s: 20 * 60, e: 23 * 60 };  // 1200 - 1380
     const R_20_07_A = { s: 20 * 60, e: 24 * 60 }; // 1200 - 1440 (Nocturnas M parte 1)
     const R_20_07_B = { s: 0, e: 7 * 60 };        // 0 - 420 (Nocturnas M parte 2)
     const R_23_07_A = { s: 23 * 60, e: 24 * 60 }; // 1380 - 1440 (Nocturnas TN extra parte 1)
@@ -934,7 +961,7 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
         b.excesoJornada1 += intersect(start, end, R_15_20.s, R_15_20.e);
         b.nocturnas += intersect(start, end, R_20_07_A.s, R_20_07_A.e);
         b.nocturnas += intersect(start, end, R_20_07_B.s, R_20_07_B.e);
-    } else {
+    } else if (shift === 'TN') {
         // Regla negocio: para turno TN, 20:00-23:00 pertenece a jornada normal.
         // Nocturnas solo en horas EXTRA (23:00-07:00).
         b.horasDia += intersect(start, end, R_07_15.s, R_07_15.e);
@@ -942,6 +969,16 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
         b.nocturnas += intersect(start, end, R_23_07_A.s, R_23_07_A.e);
         b.nocturnas += intersect(start, end, R_23_07_B.s, R_23_07_B.e);
         // Horas Noche queda en 0 por decisión funcional actual (sin turno N activo)
+    } else {
+        // Turno NOCHE (23:00-07:00)
+        // Horas de presencia normales van a Horas Noche.
+        // NOCTURNAS solo recoge el tramo EXTRA previo 20:00-23:00.
+        // Extras diurnas fuera de turno se reparten en DIA/EXCESO1.
+        b.horasDia += intersect(start, end, R_07_15.s, R_07_15.e);
+        b.excesoJornada1 += intersect(start, end, R_15_20.s, R_15_20.e);
+        b.horasNoche += intersect(start, end, R_23_07_A.s, R_23_07_A.e);
+        b.horasNoche += intersect(start, end, R_23_07_B.s, R_23_07_B.e);
+        b.nocturnas += intersect(start, end, R_20_23.s, R_20_23.e);
     }
 
     return b;
@@ -950,7 +987,7 @@ const resolveBucket = (start: number, end: number, shift: 'M' | 'TN', isFestive:
 const addIntervalToBuckets = (
     base: TimeBuckets,
     interval: TimeInterval,
-    shift: 'M' | 'TN',
+    shift: ExportShift,
     festiveDates: Set<string>,
     _vacationDates: Set<string>
 ): TimeBuckets => {
@@ -1023,8 +1060,8 @@ interface EmployeeAnalysisContext {
     empRawPeriod: RawDataRow[];
     empRawYTD: RawDataRow[];
     workRows: RawDataRow[];
-    dailyShiftMap: Map<string, 'M' | 'TN'>;
-    userShift: 'M' | 'TN';
+    dailyShiftMap: Map<string, ExportShift>;
+    userShift: ExportShift;
     colectivo: string;
     festiveDates: Set<string>;
     vacationDates: Set<string>;
@@ -1076,7 +1113,9 @@ const buildEmployeeAnalysisContext = (
         allRawDataYTD.filter(r => toOperarioIdNumber(r.IDOperario) === employeeId),
         user
     );
-    const fallbackShift: 'M' | 'TN' = pData?.turnoAsignado === 'TN' ? 'TN' : 'M';
+    const fallbackShift: ExportShift = pData?.turnoAsignado === 'NOCHE'
+        ? 'NOCHE'
+        : (pData?.turnoAsignado === 'TN' ? 'TN' : 'M');
     const userShift = resolveShiftFromRows(empRawYTD.length > 0 ? empRawYTD : empRawPeriod, fallbackShift);
     const colectivo = resolveDepartment(
         empRawYTD.length > 0 ? empRawYTD : empRawPeriod,
@@ -1091,9 +1130,10 @@ const buildEmployeeAnalysisContext = (
         }
     });
 
+    const periodEndCarry = addDaysStr(periodEnd, 1);
     const workRows = empRawPeriod.filter(r => {
         const d = normalizeDateStr(r.Fecha);
-        return d >= periodStart && d <= periodEnd;
+        return d >= periodStart && d <= periodEndCarry;
     });
     const dailyShiftMap = buildDailyShiftMap(workRows, userShift);
 
@@ -1132,13 +1172,17 @@ const validateEmployeeRowDoubleReview = (ctx: EmployeeAnalysisContext, row: Deta
         return d >= ctx.ytdStart && d <= ctx.ytdEnd;
     };
 
-    const workIntervals = buildWorkedIntervals(ctx.workRows);
+    const workIntervals = buildWorkedIntervals(ctx.workRows).filter(interval => (
+        interval.startDate >= ctx.periodStart && interval.startDate <= ctx.periodEnd
+    ));
     let b: TimeBuckets = { horasDia: 0, excesoJornada1: 0, horasTarde: 0, nocturnas: 0, horasNoche: 0, festivas: 0 };
     workIntervals.forEach(interval => {
         const shiftForDate = ctx.dailyShiftMap.get(interval.startDate) || ctx.userShift;
         b = addIntervalToBuckets(b, interval, shiftForDate, ctx.festiveDates, ctx.vacationDates);
     });
-    const tajIntervals = buildTAJIntervals(ctx.workRows);
+    const tajIntervals = buildTAJIntervals(ctx.workRows).filter(interval => (
+        interval.startDate >= ctx.periodStart && interval.startDate <= ctx.periodEnd
+    ));
     // El TAJ ya no se resta aquí de los buckets de trabajo, porque 'buildWorkedIntervals' 
     // solo utiliza fichajes normales, excluyendo intrínsecamente el tiempo de TAJ.
     const hTAJFromIntervals = tajIntervals.reduce((acc, interval) => acc + getIntervalDuration(interval), 0);
@@ -1548,7 +1592,9 @@ const calculateEmployeeRowLegacy = (
         user
     );
 
-    const fallbackShift: 'M' | 'TN' = pData?.turnoAsignado === 'TN' ? 'TN' : 'M';
+    const fallbackShift: ExportShift = pData?.turnoAsignado === 'NOCHE'
+        ? 'NOCHE'
+        : (pData?.turnoAsignado === 'TN' ? 'TN' : 'M');
     const userShift = resolveShiftFromRows(empRawYTD.length > 0 ? empRawYTD : empRawPeriod, fallbackShift);
     const colectivo = resolveDepartment(
         empRawYTD.length > 0 ? empRawYTD : empRawPeriod,
@@ -1574,7 +1620,11 @@ const calculateEmployeeRowLegacy = (
         }
     });
 
-    const workRows = empRawPeriod.filter(r => inPeriod(r.Fecha));
+    const periodEndCarry = addDaysStr(periodEnd, 1);
+    const workRows = empRawPeriod.filter(r => {
+        const d = normalizeDateStr(r.Fecha);
+        return d >= periodStart && d <= periodEndCarry;
+    });
     const dailyShiftMap = buildDailyShiftMap(workRows, userShift);
 
     const normalAudit = auditUnpairedPunches(workRows, (r) => isNormalWorkMotivo(r.MotivoAusencia));
@@ -1585,7 +1635,9 @@ const calculateEmployeeRowLegacy = (
         );
     }
 
-    const workIntervals = buildWorkedIntervals(workRows);
+    const workIntervals = buildWorkedIntervals(workRows).filter(interval => (
+        interval.startDate >= periodStart && interval.startDate <= periodEnd
+    ));
 
     let b: TimeBuckets = { horasDia: 0, excesoJornada1: 0, horasTarde: 0, nocturnas: 0, horasNoche: 0, festivas: 0 };
     workIntervals.forEach(interval => {
@@ -1605,7 +1657,9 @@ const calculateEmployeeRowLegacy = (
         );
     }
 
-    const tajIntervals = buildTAJIntervals(workRows);
+    const tajIntervals = buildTAJIntervals(workRows).filter(interval => (
+        interval.startDate >= periodStart && interval.startDate <= periodEnd
+    ));
     // El TAJ ya no se resta aquí de los buckets de trabajo, porque 'buildWorkedIntervals' 
     // solo utiliza fichajes normales, excluyendo intrínsecamente el tiempo de TAJ.
     const hTAJFromIntervals = tajIntervals.reduce((acc, interval) => acc + getIntervalDuration(interval), 0);
@@ -1736,19 +1790,20 @@ const getDuration = (row: RawDataRow): number => {
  * REGLAS:
  * - Turno M: Horario esperado 07:00
  * - Turno TN: Horario esperado 15:00
+ * - Turno NOCHE: Horario esperado 23:00
  * - Margen de tolerancia: 1 minuto 59 segundos (1.983 min)
  * - Solo cuenta la PRIMERA ENTRADA NORMAL del día (sin motivo de ausencia)
  * - Si entrada > horario + margen, se considera retraso
  * 
  * @param rows Todos los fichajes del empleado
- * @param getShiftForDate Resolución de turno por día ('M' o 'TN')
+ * @param getShiftForDate Resolución de turno por día ('M' | 'TN' | 'NOCHE')
  * @param startDate Fecha inicio periodo (YYYY-MM-DD)
  * @param endDate Fecha fin periodo (YYYY-MM-DD)
  * @returns { num: cantidad de días con retraso, tiempo: horas totales de retraso }
  */
 const calcularRetrasos = (
     rows: RawDataRow[],
-    getShiftForDate: (date: string) => 'M' | 'TN',
+    getShiftForDate: (date: string) => ExportShift,
     startDate: string,
     endDate: string,
     festiveDates?: Set<string>
@@ -1776,7 +1831,7 @@ const calcularRetrasos = (
         if (isFestive) continue;
 
         const turnoDia = getShiftForDate(fecha);
-        const horaEsperada = turnoDia === 'M' ? 7 * 60 : 15 * 60;
+        const horaEsperada = turnoDia === 'NOCHE' ? 23 * 60 : (turnoDia === 'M' ? 7 * 60 : 15 * 60);
 
         // Filtrar solo ENTRADAS normales (isEntrada soporta boolean/number/string)
         const entradas = fichs
@@ -2672,15 +2727,16 @@ export const generatePayrollExport = async (
     console.log(`Empleados: ${operarios.length}`);
 
     // ── 2. Obtener fichajes del PERIODO ───────────────────────────────
+    const periodFetchEnd = addDaysStr(periodEnd, 1);
     onProgress?.({
         phase: 'cargando_periodo',
         percent: 8,
         message: 'Cargando fichajes del periodo...'
     });
-    console.log('⏳ Cargando fichajes del periodo...');
+    console.log(`⏳ Cargando fichajes del periodo (con cierre TN: ${periodStart} → ${periodFetchEnd})...`);
     let allRawDataPeriod: RawDataRow[] = [];
     try {
-        allRawDataPeriod = await fetchFichajesBatched(periodStart, periodEnd, '', '', '', 10);
+        allRawDataPeriod = await fetchFichajesBatched(periodStart, periodFetchEnd, '', '', '', 10);
         console.log(`✅ Fichajes periodo: ${allRawDataPeriod.length}`);
     } catch (err: any) {
         console.error('❌ Error crítico cargando datos del periodo:', err);
@@ -2740,7 +2796,7 @@ export const generatePayrollExport = async (
     // ── 4.1. Filtrar empleados "fantasma" (Cero actividad) ────────────
     const activeRows = allRows.filter(r => {
         const totalActividad =
-            r.totalHoras + r.festivas + r.hMedico + r.hVacaciones +
+            r.totalHoras + r.excesoJornada1 + r.nocturnas + r.festivas + r.hMedico + r.hVacaciones +
             r.hLDisp + r.hLeyFam + r.asOficiales + r.espYAc +
             r.hSind + r.hVacAnt + r.hITAT + r.hITEC + r.hTAJ + r.tiempoRetrasos;
 

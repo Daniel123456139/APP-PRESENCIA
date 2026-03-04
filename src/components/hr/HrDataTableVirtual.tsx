@@ -1,5 +1,5 @@
 
-import React, { memo, useState, useMemo } from 'react';
+import React, { memo, useState, useMemo, useCallback } from 'react';
 import { FixedSizeList as List, ListChildComponentProps } from 'react-window';
 import { ProcessedDataRow } from '../../types';
 import { formatPeriodoAnalisis } from '../../utils/dateFormatter';
@@ -18,6 +18,8 @@ interface HrDataTableVirtualProps {
     flexibleEmployeeIds?: Set<number>;
     highlightEmployeeIds?: Set<number>;
 }
+
+const SUMMARY_VIRTUAL_SCROLL_STORAGE_KEY = 'hr_resumen_virtual_scroll_top';
 
 // Helpers
 const normalizeGapBoundary = (value: string): string => {
@@ -173,8 +175,9 @@ const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmplo
             <div className="w-32 px-4 text-right">
                 <JustifiedCell row={row} startDate={startDate} endDate={endDate} align="right" />
             </div>
-            <div className="w-32 px-4 text-right font-bold font-mono">{row.horasTotalesConJustificacion.toFixed(2)} h</div>
             <div className="w-32 px-4 text-right text-orange-600 font-mono">{row.horasExceso.toFixed(2)} h</div>
+            <div className="w-32 px-4 text-right text-indigo-600 font-mono">{row.nocturnas ? row.nocturnas.toFixed(2) : '0.00'} h</div>
+            <div className="w-32 px-4 text-right font-bold font-mono">{row.horasTotalesConJustificacion.toFixed(2)} h</div>
             <div className="w-32 px-4 text-right text-purple-600 font-mono">{row.festivas ? row.festivas.toFixed(2) : '0.00'} h</div>
             <div className="w-32 px-4 text-right">{`${row.numTAJ} / ${row.hTAJ.toFixed(2)}`}</div>
             {isLongRange && (
@@ -219,6 +222,16 @@ const Row = memo(({ row, style, onReview, onManualIncident, justifiedMetaByEmplo
 const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewGaps, onManualIncident, onExport, justifiedIncidentKeys, startDate, endDate, isLongRange, flexibleEmployeeIds, highlightEmployeeIds }) => {
     const [sortConfig, setSortConfig] = useState<{ key: SortableKeys; direction: SortDirection } | null>({ key: 'operario', direction: 'ascending' });
     const [viewingShiftChanges, setViewingShiftChanges] = useState<{ name: string, changes: any[] } | null>(null);
+    const initialScrollOffset = useMemo(() => {
+        const raw = sessionStorage.getItem(SUMMARY_VIRTUAL_SCROLL_STORAGE_KEY);
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    }, []);
+
+    const handleVirtualScroll = useCallback(({ scrollOffset, scrollUpdateWasRequested }: { scrollOffset: number; scrollUpdateWasRequested: boolean; }) => {
+        if (scrollUpdateWasRequested) return;
+        sessionStorage.setItem(SUMMARY_VIRTUAL_SCROLL_STORAGE_KEY, String(scrollOffset));
+    }, []);
 
     const handleSort = (key: SortableKeys) => {
         setSortConfig(current => {
@@ -297,7 +310,7 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                     valA = turnoRank(a.turnoAsignado);
                     valB = turnoRank(b.turnoAsignado);
                     isNumeric = true;
-                } else if (['operario', 'presencia', 'totalHoras', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'hTAJ', 'numTAJ', 'incidentCount', 'festivas'].includes(key as string)) {
+                } else if (['operario', 'presencia', 'totalHoras', 'horasJustificadas', 'horasTotalesConJustificacion', 'horasExceso', 'nocturnas', 'hTAJ', 'numTAJ', 'incidentCount', 'festivas'].includes(key as string)) {
                     isNumeric = true;
                 }
 
@@ -392,8 +405,9 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                 <TableHeader colKey="turnoAsignado" label="TURNO" width="w-32" align="center" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="presencia" label="PRESENCIA" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="horasJustificadas" label="JUSTIFICADAS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
-                <TableHeader colKey="horasTotalesConJustificacion" label="TOTAL" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="horasExceso" label="EXCESOS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
+                <TableHeader colKey="nocturnas" label="NOCTURNAS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
+                <TableHeader colKey="horasTotalesConJustificacion" label="TOTAL" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="festivas" label="FESTIVAS" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 <TableHeader colKey="hTAJ" label="TAJ" width="w-32" align="right" sortConfig={sortConfig} onSort={handleSort} />
                 {isLongRange && (
@@ -408,6 +422,8 @@ const HrDataTableVirtual: React.FC<HrDataTableVirtualProps> = ({ data, onReviewG
                     width={'100%'}
                     itemCount={sortedData.length}
                     itemSize={50}
+                    initialScrollOffset={initialScrollOffset}
+                    onScroll={handleVirtualScroll}
                     itemData={rowItemData}
                     itemKey={(index, data) => String(data.rows[index]?.operario ?? index)}
                 >

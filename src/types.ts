@@ -133,8 +133,8 @@ export interface ProcessedDataRow {
     horasDia: number;       // 5. (07:00 - 15:00)
     excesoJornada1: number; // 6. Extra fuera de horas normales
     horasTarde: number;     // 7. (15:00 - 20:00) Parte diurna de la tarde
-    nocturnas: number;      // 8. (20:00 - 07:00) Horas Nocturnas Universales
-    horasNoche: number;     // 9. Legacy / Unused in new logic (kept for interface compat)
+    nocturnas: number;      // 8. Horas nocturnas EXTRA fuera de la jornada normal
+    horasNoche: number;     // 9. Jornada normal del turno NOCHE (23:00 - 07:00)
     festivas: number;       // 10. Weekends/Holidays
 
     // Absences & Permits

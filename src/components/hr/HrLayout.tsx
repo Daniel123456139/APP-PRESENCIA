@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Outlet, NavLink, useLocation, useOutletContext, Navigate } from 'react-router-dom';
 import { AuthContext } from '../../App';
 import { BlogPost, Shift, SickLeave, IncidentLogEntry, CompanyHoliday, ProcessedDataRow, RawDataRow, FutureAbsence, Role, User } from '../../types';
@@ -152,6 +152,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
     // --- UI State ---
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const location = useLocation();
+    const mainContentRef = useRef<HTMLElement | null>(null);
 
     // Redirección si no hay usuario
     if (!currentUser) return <Navigate to="/login" />;
@@ -174,6 +175,28 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         const state = { startDate, endDate, startTime, endTime };
         localStorage.setItem('global_filter_state', JSON.stringify(state));
     }, [startDate, endDate, startTime, endTime]);
+
+    const mainScrollStorageKey = useMemo(() => `hr_main_scroll:${location.pathname}`, [location.pathname]);
+
+    const handleMainScroll = useCallback((event: React.UIEvent<HTMLElement>) => {
+        const node = event.currentTarget;
+        sessionStorage.setItem(mainScrollStorageKey, String(node.scrollTop));
+    }, [mainScrollStorageKey]);
+
+    useEffect(() => {
+        const node = mainContentRef.current;
+        if (!node) return;
+
+        const raw = sessionStorage.getItem(mainScrollStorageKey);
+        if (raw === null) return;
+
+        const savedTop = Number(raw);
+        if (!Number.isFinite(savedTop) || savedTop < 0) return;
+
+        requestAnimationFrame(() => {
+            node.scrollTop = savedTop;
+        });
+    }, [mainScrollStorageKey]);
 
     // Business Logic Hook
     const {
@@ -212,6 +235,23 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
     const incidentManagerRef = useRef<IncidentManagerHandle>(null);
 
     useEffect(() => {
+        if (isLoading) return;
+
+        const node = mainContentRef.current;
+        if (!node) return;
+
+        const raw = sessionStorage.getItem(mainScrollStorageKey);
+        if (raw === null) return;
+
+        const savedTop = Number(raw);
+        if (!Number.isFinite(savedTop) || savedTop < 0) return;
+
+        requestAnimationFrame(() => {
+            node.scrollTop = savedTop;
+        });
+    }, [isLoading, mainScrollStorageKey, datasetResumen.length, datasetAusencias.length]);
+
+    useEffect(() => {
         const saved = localStorage.getItem('incidentHistory');
         if (saved) {
             try {
@@ -240,7 +280,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
 
     const handleExportResumen = () => {
         if (datasetResumen.length === 0) return;
-        const headers = ['ID', 'Nombre', 'Departamento', 'Turno', 'Tiempo Real', 'Presencia', 'Justificadas', 'Total', 'Excesos', 'TAJ', 'Estado'];
+        const headers = ['ID', 'Nombre', 'Departamento', 'Turno', 'Tiempo Real', 'Presencia', 'Justificadas', 'Total', 'Excesos', 'Nocturnas', 'TAJ', 'Estado'];
         const csvContent = [
             headers.join(';'),
             ...datasetResumen.map(row => [
@@ -249,6 +289,7 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                 row.horasJustificadas.toFixed(2).replace('.', ','),
                 row.horasTotalesConJustificacion.toFixed(2).replace('.', ','),
                 row.horasExceso.toFixed(2).replace('.', ','),
+                row.nocturnas.toFixed(2).replace('.', ','),
                 `${row.numTAJ} / ${row.hTAJ.toFixed(2).replace('.', ',')}`,
                 row.incidentCount > 0 ? 'Pendiente' : 'Correcto'
             ].join(';'))
@@ -268,7 +309,13 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
         exportUnproductivityToXlsx(datasetResumen, filename, periodStr);
     };
 
-    const [turno, setTurno] = useState('all');
+    const [turno, setTurno] = useState(() => {
+        return localStorage.getItem('hr_selected_turno') || 'all';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('hr_selected_turno', turno);
+    }, [turno]);
 
     const departmentFilteredEmployees = useMemo(() => {
         if (selectedDepartment === 'all' || selectedDepartment === 'TODOS') return employeeOptions;
@@ -391,7 +438,11 @@ const HrLayout: React.FC<HrLayoutProps> = (props) => {
                 </nav>
             </aside>
 
-            <main className="flex-1 lg:ml-64 p-4 sm:p-6 lg:p-8 overflow-y-auto">
+            <main
+                ref={mainContentRef}
+                onScroll={handleMainScroll}
+                className="flex-1 lg:ml-64 p-4 sm:p-6 lg:p-8 overflow-y-auto"
+            >
                 <div className="lg:hidden flex justify-between items-center mb-4">
                     <h2 className="text-xl font-bold text-slate-800">Menu</h2>
                     <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-white rounded-md shadow-sm border border-slate-200">

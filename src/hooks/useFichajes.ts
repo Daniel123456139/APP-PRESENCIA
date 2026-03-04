@@ -39,6 +39,7 @@ export const useFichajes = (startDate: string, endDate: string, startTime: strin
             return data;
         },
         enabled: !!startDate && !!endDate,
+        placeholderData: (previousData) => previousData,
         staleTime: 0,
         // Requisito RRHH: sin autorecarga en el mismo periodo.
         // Solo refresco manual o automatico al cambiar queryKey (periodo).

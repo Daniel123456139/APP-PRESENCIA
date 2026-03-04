@@ -14,6 +14,7 @@ import { processData } from '../services/dataProcessor';
 import { fetchSyntheticPunches } from '../services/firestoreService';
 import { getCalendarioOperario, CalendarioDia } from '../services/erpApi';
 import { normalizeDateKey, extractTimeHHMM } from '../utils/datetime';
+import { parseISOToLocalDate, parseLocalDateTime, toISODateLocal } from '../utils/localDate';
 import logger from '../utils/logger';
 import { resolveEmployeeCollection } from '../services/firebaseSchemaService';
 import type { PayrollExportProgress } from '../services/exports/detailedIncidenceExportService';
@@ -43,6 +44,13 @@ export interface PayrollExportUiProgress {
 export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTime = '23:59' }: UseHrPortalDataProps) => {
     const queryDb = getFirebaseDb();
 
+    const fetchEndDate = useMemo(() => {
+        if (!endDate) return '';
+        const localEnd = parseISOToLocalDate(endDate);
+        localEnd.setDate(localEnd.getDate() + 1);
+        return toISODateLocal(localEnd);
+    }, [endDate]);
+
     // 1. Cargar Datos Maestros y Fichajes desde ERP (via TanStack Query)
     const { loading: loadingMotivos } = useMotivos();
     const { operarios, loading: loadingOperarios, refresh: refreshOperarios } = useOperarios(false);
@@ -62,11 +70,7 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         refresh: refreshErpData
     } = useFichajes(
         startDate,
-        (() => {
-            const d = new Date(endDate);
-            d.setDate(d.getDate() + 1);
-            return d.toISOString().split('T')[0];
-        })(),
+        fetchEndDate,
         startTime,
         endTime
     );
@@ -203,10 +207,26 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
 
     const analysisRange = useMemo(() => {
         if (!startDate || !endDate) return undefined;
-        const start = new Date(`${startDate}T00:00:00`);
-        const end = new Date(`${endDate}T23:59:59`);
+
+        const safeStartTime = /^\d{2}:\d{2}$/.test(startTime) ? startTime : '00:00';
+        const safeEndTime = /^\d{2}:\d{2}$/.test(endTime) ? endTime : '23:59';
+
+        const start = parseLocalDateTime(startDate, `${safeStartTime}:00`);
+        let end = parseLocalDateTime(endDate, `${safeEndTime}:59`);
+
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+            return undefined;
+        }
+
+        // Si el usuario define un rango horario que cruza medianoche
+        // (p.ej. 22:00 -> 03:00 en mismo día), extendemos el fin +1 día.
+        if (end < start) {
+            end = new Date(end);
+            end.setDate(end.getDate() + 1);
+        }
+
         return { start, end };
-    }, [startDate, endDate]);
+    }, [startDate, endDate, startTime, endTime]);
 
     const holidaysSet = useMemo(() => {
         const set = new Set<string>();
@@ -531,6 +551,10 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         return diffDays > 2;
     }, [startDate, endDate]);
 
+    const hasProcessedSnapshot = processedData.length > 0;
+    const isBlockingProcessing = isProcessing && !hasProcessedSnapshot;
+    const isRefetchingData = (isFetchingFichajes && !isLoadingFichajes) || (isProcessing && hasProcessedSnapshot);
+
     return {
         erpData,
         processedData: processedDataSafe,
@@ -546,8 +570,8 @@ export const useHrPortalData = ({ startDate, endDate, startTime = '00:00', endTi
         activeSickLeavesRaw,
         companyCalendarDays,
         selectedEmployeeData,
-        isLoading: isLoadingFichajes || loadingOperarios || loadingMotivos || loadingCalendario || isProcessing,
-        isRefetching: isFetchingFichajes && !isLoadingFichajes,
+        isLoading: isLoadingFichajes || loadingOperarios || loadingMotivos || loadingCalendario || isBlockingProcessing,
+        isRefetching: isRefetchingData,
         fichajesError,
         refreshErpData,
         reloadFromServer,
